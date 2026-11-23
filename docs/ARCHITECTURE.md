@@ -1,6 +1,6 @@
 # Architecture
 
-XJAUS is an independent Xbox Cloud Gaming and Xbox Remote Play client. Its current architecture uses an Electron desktop shell, a TypeScript/Vite renderer, and a Rust sidecar for authentication and session control.
+XJAUS is an independent Xbox Cloud Gaming and Xbox Remote Play client. The current shipping Linux and Windows apps use an Electron desktop shell, a TypeScript/Vite renderer, and a Rust sidecar for authentication and session control. The planned Linux destination is a native Qt Quick/QML frontend using KDE Kirigami; Windows remains on Electron.
 
 | Layer | Code | Responsibility |
 | --- | --- | --- |
@@ -8,7 +8,8 @@ XJAUS is an independent Xbox Cloud Gaming and Xbox Remote Play client. Its curre
 | Electron trust boundary | electron/preload.cjs, electron/main.cjs, electron/security.cjs | Narrow renderer API, IPC validation, desktop lifecycle and Rust sidecar supervision. |
 | Electron sidecar | src-tauri/src/bin/xjaus_backend.rs | JSON requests over process stdio, authentication and session lifecycle. Linux builds from src-tauri/Cargo.toml; Windows builds the same entry point from backend-windows/Cargo.toml. |
 | Retained Tauri runner | src-tauri/src/lib.rs | Native command bridge sharing Rust service modules; not the Electron distribution. |
-| Packaging | package.json, scripts/packaging.cjs, scripts/build-windows.cjs | Renderer assets and platform sidecar are inputs; package verification and release authorization are separate. |
+| Packaging | package.json, scripts/packaging.cjs, scripts/build-windows.cjs | Current Electron renderer assets and platform sidecar are inputs; package verification and release authorization are separate. |
+| Linux KDE prototype | kde-linux/ | Experimental native sign-in/status slice using Kirigami and the existing sidecar. Not wired into release packaging. |
 
 ## Boundaries to preserve
 
@@ -21,4 +22,4 @@ XJAUS is an independent Xbox Cloud Gaming and Xbox Remote Play client. Its curre
 
 Authentication and stream attempt identities are distinct. Review admission, cancellation, late responses and logout across both runners; rejecting a late response locally does not establish remote cleanup. Keep credentials on the trusted side of the bridge and sanitize diagnostic exports separately from UI errors. Read [privacy](../PRIVACY.md) before capturing fixtures or diagnostics.
 
-The staged replacement principles, milestones, control-contract goals, compatibility rules, and open audit questions are in [the XJAUS Founding Architecture](FOUNDING-ARCHITECTURE.md). That document is a proposal, not an implementation or platform-validation claim.
+The staged replacement principles, Linux Kirigami migration gates, milestones, control-contract goals, compatibility rules, and open audit questions are in [the XJAUS Founding Architecture](FOUNDING-ARCHITECTURE.md). That document is a proposal, not an implementation or platform-validation claim.

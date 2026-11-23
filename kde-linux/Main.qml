@@ -95,9 +95,23 @@ Kirigami.ApplicationWindow {
 
         function onRequestFinished(id, command, result, error) {
             if (command === "auth_status" && id === root.statusRequestId) {
-                root.applyAuthStatus(result)
-                if (error.length > 0)
+                if (error.length > 0) {
                     root.loginMessage = "Could not read sign-in status."
+                    return
+                }
+                root.applyAuthStatus(result)
+                return
+            }
+
+            if (command === "logout" && id === root.logoutRequestId) {
+                root.logoutRequestId = 0
+                if (error.length > 0) {
+                    root.loginMessage = "Sign-out could not be confirmed. Restart the app and sign in again."
+                    return
+                }
+                root.authenticated = false
+                root.loginMessage = "Signed out locally. This does not confirm server-side token revocation."
+                root.statusRequestId = backend.invoke("auth_status")
                 return
             }
 

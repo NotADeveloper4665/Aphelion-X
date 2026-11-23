@@ -10,7 +10,7 @@ This document adapts the progressive-replacement principles used in Aphelion to 
 
 XJAUS is an independent desktop client for Xbox Cloud Gaming and Xbox Remote Play. Its current stack is Electron, a TypeScript/Vite renderer, and a Rust sidecar. The renderer owns the controller-oriented UI and WebRTC media path. The Electron main process starts the Rust sidecar and exposes a restricted IPC bridge. The Rust code handles authentication and stream/session control. Linux and Windows builds use different Cargo manifests around shared Rust modules; a Tauri runner is retained in the source tree.
 
-The goal is to improve reliability, security, observability, and maintainability while preserving the existing user-visible connection flows. Aphelion is a separate Linux streaming-host project. XJAUS should borrow its engineering principles—explicit ownership, contracts, evidence, small extraction gates—not Syzygy host code or assumptions about capture, encoders, FEC, or Moonlight protocol handling.
+The goal is to improve reliability, security, observability, and maintainability while preserving the existing user-visible connection flows. The requested Linux direction is a native Qt Quick/QML frontend using KDE Kirigami; Windows keeps the existing Electron frontend. The current Linux release remains on Electron until the native frontend passes the migration gates below. Aphelion is a separate Linux streaming-host project. XJAUS should borrow its engineering principles—explicit ownership, contracts, evidence, small extraction gates—not Syzygy host code or assumptions about capture, encoders, FEC, or Moonlight protocol handling.
 
 **Core migration rule:** keep the existing path available until a replacement passes equivalent checks on the affected platform and session type. Ship one bounded change at a time, and make rollback practical.
 
@@ -147,7 +147,13 @@ For each extraction:
 
 ### Milestone 4 — Replace a subsystem only when evidence requires it
 
-A replacement might be considered for a specific renderer media component, service adapter, or IPC transport only when an audit or measurement shows a concrete limitation.
+The Linux UI is an explicit platform migration target. Start as a separate Kirigami application and reuse the existing Rust sidecar contract. Keep Electron as the shipping Linux fallback while the new frontend is incomplete. Do not combine this work with a WebRTC, authentication, IPC, or packaging rewrite.
+
+The first native slice is an isolated sign-in/status frontend in kde-linux/. Expand it one user flow at a time: settings and profile, console discovery, Cloud catalog, then the player and its controller/input behavior. Each screen must use the existing backend command path or a documented adapter; never fork service logic into a second Rust implementation.
+
+Do not change Linux release defaults until the native app covers sign-in/logout, settings, console and Cloud flows, WebRTC playback, gamepad and keyboard navigation, diagnostics, and recovery, and passes the same relevant Linux compatibility checks as the existing app. Rehearse fallback to the Electron package without migrating or restoring credentials. The native preview is opt-in and does not imply that packaging is wired up or that it is validated.
+
+A replacement might also be considered for a specific renderer media component, service adapter, or IPC transport only when an audit or measurement shows a concrete limitation.
 
 Before replacing one:
 

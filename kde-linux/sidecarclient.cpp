@@ -148,7 +148,7 @@ qulonglong SidecarClient::invoke(const QString &command, const QVariantMap &args
         rejectLater(QStringLiteral("Backend request limit reached"));
         return id;
     }
-    if (nextId_ >= static_cast<qulonglong>(std::numeric_limits<double>::max())) {
+    if (nextId_ >= 9007199254740000ULL) {
         rejectLater(QStringLiteral("Backend request ID limit reached"));
         return id;
     }
@@ -175,8 +175,10 @@ qulonglong SidecarClient::invoke(const QString &command, const QVariantMap &args
     pending_.insert(id, Pending{command, timer});
     timer->start(timeoutMs);
 
-    if (process_.write(line) != line.size())
+    if (process_.write(line) != line.size()) {
+        process_.kill();
         finish(id, {}, QStringLiteral("Backend IPC write failed"));
+    }
     return id;
 }
 

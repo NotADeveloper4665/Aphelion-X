@@ -9,7 +9,6 @@
 #include <QJsonParseError>
 #include <QUrl>
 
-#include <limits>
 
 namespace {
 constexpr qsizetype kMaxLineBytes = 2 * 1024 * 1024;
@@ -32,6 +31,8 @@ SidecarClient::SidecarClient(QObject *parent)
 {
     connect(&process_, &QProcess::readyReadStandardOutput,
             this, &SidecarClient::readResponses);
+    connect(&process_, &QProcess::readyReadStandardError,
+            this, [this] { process_.readAllStandardError(); });
     connect(&process_, &QProcess::started, this, [this] {
         started_ = true;
         setStatusMessage(QStringLiteral("Backend ready"));
@@ -39,11 +40,21 @@ SidecarClient::SidecarClient(QObject *parent)
     });
     connect(&process_, &QProcess::errorOccurred, this,
             [this](QProcess::ProcessError error) {
-        if (error == QProcess::FailedToStart || error == QProcess::Crashed) {
+        if (error == QProcess::WriteError) {
+            const bool wasAvailable = started_;
+            started_ = false;
+            failAll(QStringLiteral("Backend IPC write failed"));
+            setStatusMessage(QStringLiteral("Backend IPC failed"));
+            process_.kill();
+            if (wasAvailable)
+                emit availableChanged();
+        } else if (error == QProcess::FailedToStart || error == QProcess::Crashed) {
+            const bool wasAvailable = started_;
             started_ = false;
             failAll(QStringLiteral("Backend process stopped"));
             setStatusMessage(process_.errorString());
-            emit availableChanged();
+            if (wasAvailable)
+                emit availableChanged();
         }
     });
     connect(&process_, qOverload<int, QProcess::ExitStatus>(&QProcess::finished),

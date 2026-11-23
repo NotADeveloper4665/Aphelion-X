@@ -68,6 +68,7 @@ XJAUS is an independent desktop client for Xbox Cloud Gaming and Xbox Remote Pla
 - CI workflow (source): [.github/workflows/validation.yml](.github/workflows/validation.yml) — Node 24, separate Cargo manifests for Linux (`src-tauri`) and Windows (`backend-windows`).
 - Source checks: [CONTRIBUTING.md](CONTRIBUTING.md)
 - Architecture boundaries: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+- Experimental native Linux UI: [KDE/Kirigami prototype](kde-linux/README.md) (sign-in slice only; not used by release packages)
 - Linux packaging (local): `npm run dist:linux` (Docker, not part of CI source validation)
 - Windows build instructions: [WINDOWS-BUILD.md](WINDOWS-BUILD.md)
 - Rollback procedure: [docs/ROLLBACK.md](docs/ROLLBACK.md)

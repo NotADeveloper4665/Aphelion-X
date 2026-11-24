@@ -1,6 +1,5 @@
 static SESSION_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 use crate::auth::TokenBundle;
-#[cfg(test)]
 use zeroize::Zeroizing;
 
 production_or_tauri! {
@@ -11,23 +10,19 @@ const ACCOUNT: &str = "xbox-auth-v1";
 // Secret Service is the only authority. The historical fallback is never read or
 // modified during normal operation, but explicit logout removes it.
 trait SecretStore {
-    #[cfg(test)]
     fn set(&self, blob: &[u8]) -> Result<(), String>;
-    #[cfg(test)]
     fn get(&self) -> Result<Option<Vec<u8>>, String>;
     fn delete(&self) -> Result<(), String>;
 }
 production_or_tauri! {
 struct KeyringStore;
 impl SecretStore for KeyringStore {
-    #[cfg(test)]
     fn set(&self, blob: &[u8]) -> Result<(), String> {
         keyring::Entry::new(SERVICE, ACCOUNT)
             .map_err(|_| "Secret Service unavailable".to_string())?
             .set_secret(blob)
             .map_err(|_| "Cannot persist session in Secret Service".to_string())
     }
-    #[cfg(test)]
     fn get(&self) -> Result<Option<Vec<u8>>, String> {
         let entry = keyring::Entry::new(SERVICE, ACCOUNT)
             .map_err(|_| "Secret Service unavailable".to_string())?;
@@ -47,19 +42,18 @@ impl SecretStore for KeyringStore {
     }
 }}
 
-#[cfg(test)]
 #[derive(serde::Serialize, serde::Deserialize)]
 struct VersionedBundle<T> {
     bundle_version: u64,
     updated_at_utc: u64,
+    #[serde(default)]
+    generation: u64,
     bundle: T,
 }
-#[cfg(test)]
 fn save_to(store: &dyn SecretStore, bundle: &TokenBundle) -> Result<(), String> {
     let blob = Zeroizing::new(serde_json::to_vec(bundle).map_err(|_| "Cannot encode session")?);
     store.set(&blob)
 }
-#[cfg(test)]
 fn load_from(store: &dyn SecretStore) -> Result<Option<TokenBundle>, String> {
     let Some(secret) = store.get()? else {
         return Ok(None);
@@ -72,7 +66,24 @@ fn load_from(store: &dyn SecretStore) -> Result<Option<TokenBundle>, String> {
         .map(Some)
         .map_err(|_| "Invalid session in Secret Service".into())
 }
+#[cfg(target_os = "linux")]
+fn auth_state_root() -> Result<std::path::PathBuf, String> {
+    let base = match std::env::var_os("XDG_STATE_HOME") {
+        Some(path) if std::path::Path::new(&path).is_absolute() => std::path::PathBuf::from(path),
+        Some(_) => return Err("XDG_STATE_HOME must be an absolute path".into()),
+        None => std::path::PathBuf::from(
+            std::env::var_os("HOME").ok_or("HOME is unavailable")?,
+        )
+        .join(".local/state"),
+    };
+    Ok(base.join("io.github.xjaus.xjaus/auth-state"))
+}
 pub fn generation() -> Result<u64, String> {
+    #[cfg(all(target_os = "linux", not(test)))]
+    {
+        return crate::logout_barrier::LogoutBarrier::acquire(&auth_state_root()?)?.generation();
+    }
+    #[cfg(any(not(target_os = "linux"), test))]
     Ok(SESSION_GENERATION.load(std::sync::atomic::Ordering::SeqCst))
 }
 #[cfg(test)]
@@ -82,21 +93,39 @@ fn begin_login_at(root: &std::path::Path) -> Result<u64, String> {
     barrier.generation()
 }
 pub fn begin_login() -> Result<u64, String> {
+    #[cfg(all(target_os = "linux", not(test)))]
+    {
+        let barrier = crate::logout_barrier::LogoutBarrier::acquire(&auth_state_root()?)?;
+        barrier.advance()?;
+        let generation = barrier.generation()?;
+        SESSION_GENERATION.store(generation, std::sync::atomic::Ordering::SeqCst);
+        return Ok(generation);
+    }
+    #[cfg(any(not(target_os = "linux"), test))]
     Ok(SESSION_GENERATION
         .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
         .wrapping_add(1))
 }
 pub fn save_if_generation(
-    _bundle: &TokenBundle,
-    _current: &TokenBundle,
+    bundle: &TokenBundle,
+    current: &TokenBundle,
     expected: u64,
 ) -> Result<(), String> {
+    #[cfg(all(target_os = "linux", not(test)))]
+    {
+        return save_if_generation_at(&KeyringStore, &auth_state_root()?, bundle, current, expected);
+    }
+    #[cfg(all(target_os = "linux", test))]
+    if generation()? != expected {
+        return Err("Session invalidated by logout or another login".into());
+    }
+    #[cfg(not(target_os = "linux"))]
     if generation()? != expected {
         return Err("Session invalidated by logout or another login".into());
     }
     Ok(())
 }
-#[cfg(test)]
+#[cfg(any(test, target_os = "linux"))]
 fn save_if_generation_at(
     store: &dyn SecretStore,
     root: &std::path::Path,
@@ -114,14 +143,35 @@ fn save_if_generation_at(
     {
         return Err("Session changed in another process".into());
     }
-    save_to(store, bundle)
+    save_versioned_to(store, bundle, expected)
 }
-tauri_only! {
-    pub fn save(_bundle: &TokenBundle) -> Result<(), String> {
+production_or_tauri! {
+    pub fn save(bundle: &TokenBundle) -> Result<(), String> {
+        #[cfg(all(target_os = "linux", not(test)))]
+        {
+            let barrier = crate::logout_barrier::LogoutBarrier::acquire(&auth_state_root()?)?;
+            if barrier.blocked()? {
+                return Err("No authorized login generation".into());
+            }
+            return save_versioned_to(&KeyringStore, bundle, barrier.generation()?);
+        }
+        #[cfg(any(not(target_os = "linux"), test))]
         Ok(())
     }
 }
-pub fn login(_bundle: &TokenBundle, expected: u64) -> Result<(), String> {
+pub fn login(bundle: &TokenBundle, expected: u64) -> Result<(), String> {
+    #[cfg(all(target_os = "linux", not(test)))]
+    {
+        let barrier = crate::logout_barrier::LogoutBarrier::acquire(&auth_state_root()?)?;
+        if barrier.generation()? != expected {
+            return Err("Login invalidated by logout".into());
+        }
+        barrier.block()?;
+        save_versioned_to(&KeyringStore, bundle, expected)?;
+        barrier.unblock()?;
+        return Ok(());
+    }
+    #[cfg(any(not(target_os = "linux"), test))]
     if generation()? != expected {
         return Err("Login invalidated by logout".into());
     }
@@ -140,19 +190,36 @@ fn login_at(
     }
     // Keep the barrier in place if any write or sync fails.
     barrier.block()?;
-    barrier.advance()?;
-    save_to(store, bundle)?;
+    save_versioned_to(store, bundle, expected)?;
     barrier.unblock()
 }
-#[cfg(test)]
+#[cfg(any(test, target_os = "linux"))]
 fn load_guarded(
-    _store: &dyn SecretStore,
-    _root: &std::path::Path,
+    store: &dyn SecretStore,
+    root: &std::path::Path,
 ) -> Result<Option<TokenBundle>, String> {
-    Ok(None)
+    let barrier = crate::logout_barrier::LogoutBarrier::acquire(root)?;
+    if barrier.blocked()? {
+        return Ok(None);
+    }
+    let expected = barrier.generation()?;
+    let Some(secret) = store.get()? else { return Ok(None) };
+    let secret = Zeroizing::new(secret);
+    let Ok(stored) = serde_json::from_slice::<VersionedBundle<TokenBundle>>(&secret) else {
+        return Ok(None);
+    };
+    if stored.bundle_version != 1 || stored.generation != expected {
+        return Ok(None);
+    }
+    Ok(Some(stored.bundle))
 }
-tauri_only! {
+production_or_tauri! {
     pub fn load() -> Result<Option<TokenBundle>, String> {
+        #[cfg(all(target_os = "linux", not(test)))]
+        {
+            return load_guarded(&KeyringStore, &auth_state_root()?);
+        }
+        #[cfg(any(not(target_os = "linux"), test))]
         Ok(None)
     }
 }
@@ -219,8 +286,40 @@ tauri_only! {
 
 production_or_tauri! {
     pub fn delete_persistent() -> Result<(), String> {
+        #[cfg(all(target_os = "linux", not(test)))]
+        {
+            let barrier = crate::logout_barrier::LogoutBarrier::acquire(&auth_state_root()?)?;
+            barrier.block()?;
+            barrier.advance()?;
+            return delete_from(&KeyringStore, legacy_path(std::env::var_os("HOME"), false));
+        }
+        #[cfg(any(not(target_os = "linux"), test))]
         delete_from(&KeyringStore, legacy_path(std::env::var_os("HOME"), false))
     }
+}
+
+fn save_versioned_to(
+    store: &dyn SecretStore,
+    bundle: &TokenBundle,
+    generation: u64,
+) -> Result<(), String> {
+    let blob = Zeroizing::new(
+        serde_json::to_vec(&VersionedBundle {
+            bundle_version: 1,
+            updated_at_utc: now_unix(),
+            generation,
+            bundle,
+        })
+        .map_err(|_| "Cannot encode session")?,
+    );
+    store.set(&blob)
+}
+
+fn now_unix() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 #[cfg(test)]
@@ -251,7 +350,7 @@ mod tests {
         let store = Store::default();
         save_to(&store, &bundle("old")).unwrap();
         assert!(matches!(load_guarded(&store, &root), Ok(None) | Err(_)));
-        assert!(!root.exists());
+        std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn stale_login_and_refresh_cannot_replace_new_session() {
@@ -437,6 +536,7 @@ mod tests {
         let wrapped = VersionedBundle {
             bundle_version: 3,
             updated_at_utc: 2,
+            generation: 0,
             bundle: current.clone(),
         };
         store.set(&serde_json::to_vec(&wrapped).unwrap()).unwrap();

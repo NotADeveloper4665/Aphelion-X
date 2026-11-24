@@ -21,7 +21,7 @@ mod auth_gate;
 mod catalog;
 mod console_presence;
 mod instance_guard;
-#[cfg(all(test, not(windows)))]
+#[cfg(any(target_os = "linux", all(test, not(windows))))]
 mod logout_barrier;
 #[cfg_attr(windows, path = "profile_windows.rs")]
 mod profile;
@@ -32,6 +32,7 @@ mod subscription;
 #[cfg_attr(windows, path = "vault_windows.rs")]
 pub mod vault;
 mod wake;
+mod xhome_discovery;
 #[cfg(windows)]
 mod windows_fs;
 
@@ -131,7 +132,7 @@ fn auth_status_after(state: &State<'_, AppState>) -> Status {
             .and_then(|tokens| tokens.as_ref())
             .and_then(|t| account_scope::catalog_account_scope(&t.web_token)),
         account: "Xbox account".into(),
-        storage: "memory (session only)".into(),
+        storage: if cfg!(target_os = "linux") { "system keyring" } else { "memory only" }.into(),
     }
 }
 fn token_text(value: &Value, key: &str) -> Result<String, String> {
@@ -400,10 +401,11 @@ async fn poll_login(attempt_id: String, state: State<'_, AppState>) -> Result<St
                         Ok(saved)
                     })?;
                     let storage = match saved {
-                        Ok(()) => "memory",
+                        Ok(()) if cfg!(target_os = "linux") => "system keyring",
+                        Ok(()) => "memory only",
                         Err(error) if error.contains("fallback passphrase required") => "passphrase-required",
                         Err(_) => return Err(
-                            "Authentication succeeded, but secure storage failed; tokens remain only in memory".into(),
+                            "Authentication succeeded, but the system keyring could not save the session. Unlock or enable the keyring, then sign in again.".into(),
                         ),
                     };
                     Ok(Status {
@@ -467,13 +469,11 @@ async fn complete_login(
 }
 
 #[tauri::command]
-fn persist_session(_state: State<'_, AppState>) -> Result<Status, String> {
-    Err("Session persistence is disabled; sessions are memory only".into())
-}
-
-#[tauri::command]
-fn load_session(_state: State<'_, AppState>) -> Result<Status, String> {
-    Err("Session restoration is disabled; sign in again".into())
+fn persist_session(state: State<'_, AppState>) -> Result<Status, String> {
+    let tokens = state.tokens.lock().map_err(|_| state_error())?.clone()
+        .ok_or("Sign in before saving a session")?;
+    vault::save(&tokens)?;
+    Ok(auth_status_after(&state))
 }
 
 #[tauri::command]
@@ -488,8 +488,29 @@ fn auth_status(state: State<'_, AppState>) -> Result<Status, String> {
             .as_ref()
             .and_then(|t| account_scope::catalog_account_scope(&t.web_token)),
         account: if authenticated { "Xbox account" } else { "" }.into(),
-        storage: "memory (session only)".into(),
+        storage: if authenticated && cfg!(target_os = "linux") { "system keyring" } else if authenticated { "memory only" } else { "not signed in" }.into(),
     })
+}
+
+#[tauri::command]
+async fn load_session(state: State<'_, AppState>) -> Result<Status, String> {
+    if state.tokens.lock().map_err(|_| state_error())?.is_some() {
+        return Ok(auth_status_after(&state));
+    }
+    let Some(saved) = vault::load()? else {
+        return auth_status(state);
+    };
+    let epoch = state.auth_gate.capture()?;
+    let vault_generation = vault::generation()?;
+    let refreshed = auth::refresh_bundle(&state.client, &saved)
+        .await
+        .map_err(|error| error.to_string())?;
+    state.auth_gate.commit(epoch, || {
+        vault::save_if_generation(&refreshed, &saved, vault_generation)?;
+        *state.tokens.lock().map_err(|_| state_error())? = Some(refreshed);
+        Ok(())
+    })?;
+    Ok(auth_status_after(&state))
 }
 
 #[tauri::command]
@@ -666,8 +687,11 @@ async fn list_consoles_smartglass(state: State<'_, AppState>) -> Result<Value, S
                 None,
                 Some(&authorization),
                 &[
-                    ("x-xbl-contract-version", "4"),
-                    ("skillplatform", "RemoteManagement"),
+                    ("Accept-Language", "en-US"),
+                    ("x-xbl-contract-version", "2"),
+                    ("x-xbl-client-name", "XboxApp"),
+                    ("x-xbl-client-type", "UWA"),
+                    ("x-xbl-client-version", "39.39.22001.0"),
                     ("Cache-Control", "no-store, no-cache, must-revalidate"),
                     ("Pragma", "no-cache"),
                 ],
@@ -797,20 +821,25 @@ fn check_stream_attempt(state: &AppState, id: Option<&str>) -> Result<(), String
 
 #[tauri::command]
 async fn list_streaming_servers(state: State<'_, AppState>) -> Result<Value, String> {
-    let bundle = snapshot_tokens(&state)?;
-    let host = region_host(&bundle.home_stream_token)?;
-    let bearer = token_text(&bundle.home_stream_token, "gsToken")?;
-    get_json(
-        &state.client,
-        format!("https://{host}/v6/servers/home"),
-        Some(&bearer),
-        None,
-        &[
-            ("Cache-Control", "no-store, no-cache, must-revalidate"),
-            ("Pragma", "no-cache"),
-        ],
-    )
-    .await
+    let (epoch, bundle) = snapshot_read_auth(&state)?;
+    match xhome_discovery::list_servers(&state.client, &bundle.home_stream_token).await {
+        Ok(value) => state.auth_gate.commit(epoch, || Ok(value)),
+        Err(error) if error.contains("HTTP 401") => {
+            let vault_generation = vault::generation()?;
+            let refreshed = auth::refresh_bundle(&state.client, &bundle)
+                .await
+                .map_err(|e| format!("Xbox session refresh failed: {e}"))?;
+            state.auth_gate.commit(epoch, || {
+                vault::save_if_generation(&refreshed, &bundle, vault_generation)?;
+                *state.tokens.lock().map_err(|_| state_error())? = Some(refreshed.clone());
+                Ok(())
+            })?;
+            let value =
+                xhome_discovery::list_servers(&state.client, &refreshed.home_stream_token).await?;
+            state.auth_gate.commit(epoch, || Ok(value))
+        }
+        Err(error) => Err(error),
+    }
 }
 
 #[tauri::command]

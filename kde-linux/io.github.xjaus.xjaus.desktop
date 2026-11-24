@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=XJAUS
+Comment=Native KDE client for Xbox Cloud Gaming and Remote Play
+Exec=xjaus-kde
+Icon=io.github.xjaus.xjaus
+Terminal=false
+Categories=Game;Network;
+StartupWMClass=io.github.xjaus.xjaus
+StartupNotify=true

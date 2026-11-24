@@ -27,7 +27,7 @@ window.addEventListener('pagehide',()=>controllerPresence.dispose());
 import { CloudLibrary, LIBRARY_FILTERS, filterLibrary, bindSuccessfulCloudPlayback, type LibraryFilter } from './cloud-library';
 import './console-wake';
 import { mountLoadingControls } from './loading-controls';
-import { invokeBackend as invoke, openExternalUrl as openUrl, openMicrosoftVerificationUrl as openVerificationUrl, copyToClipboard } from "./backend";
+import { invokeBackend as invoke, openExternalUrl as openUrl, openMicrosoftVerificationUrl as openVerificationUrl, copyToClipboard, reportNativeStreamState } from "./backend";
 import { normalizeCloudTitles, productIds, type CloudTitle } from "./catalog";
 import { createMetadataQueue } from "./metadata-queue";
 import { gameDisplayName } from './game-name';
@@ -632,6 +632,7 @@ async function stopGame(): Promise<void> {
     starting = false;
     toast.hidden = true; clearTextBinding(toast); toast.textContent = '';
     setScreen("dashboard");
+    void reportNativeStreamState(false).catch(() => undefined);
     renderHomeRecent(currentConsoles);
     const origin=attempt?.origin;
     switchTab(attempt?.tab ?? activeTab, !origin?.isConnected);
@@ -651,6 +652,7 @@ async function startGame(kind: "home" | "cloud", target: string, name: string, a
   const active = () => connectionAttempt === attempt && !attempt.abort.signal.aborted;
   const check = () => { if (!active()) throw new DOMException('Connection cancelled', 'AbortError'); };
   starting = true;
+  void reportNativeStreamState(true).catch(() => undefined);
   toast.hidden = true;
   clearTextBinding(toast); toast.textContent = '';
   try {
@@ -754,7 +756,7 @@ async function startGame(kind: "home" | "cloud", target: string, name: string, a
       attempt.generation,
     );
     session = candidate;
-    await candidate.negotiate(kind, target, selectedProfile());
+    await candidate.negotiate(kind, target, selectedProfile(), console?.regionHost);
     check();
     if (kind === "cloud") bindText(message,()=>t('waitingVideo'));
   } catch (error) {
@@ -764,6 +766,33 @@ async function startGame(kind: "home" | "cloud", target: string, name: string, a
     if (connectionGeneration === stoppedGeneration) notice(() => t('connectionFailed',{name:name,error:errorText(error)}));
   } finally { if (active()) starting = false; }
 }
+
+window.addEventListener('xjaus:native-launch', event => {
+  const detail = (event as CustomEvent<unknown>).detail;
+  if (!detail || typeof detail !== 'object') return;
+  const launch = detail as {
+    kind?: unknown; target?: unknown; name?: unknown;
+    artwork?: unknown; console?: unknown;
+  };
+  if ((launch.kind !== 'home' && launch.kind !== 'cloud')
+      || typeof launch.target !== 'string' || !launch.target
+      || typeof launch.name !== 'string' || !launch.name) return;
+  document.documentElement.classList.add('xjaus-native-player');
+  let nativeStyle = document.getElementById('xjaus-native-player-style');
+  if (!nativeStyle) {
+    nativeStyle = document.createElement('style');
+    nativeStyle.id = 'xjaus-native-player-style';
+    nativeStyle.textContent = '#login-screen,#dashboard{display:none!important}.player-screen{display:grid!important}';
+    document.head.append(nativeStyle);
+  }
+  void startGame(
+    launch.kind,
+    launch.target,
+    launch.name,
+    launch.artwork && typeof launch.artwork === 'object' ? launch.artwork as CloudTitle : undefined,
+    launch.console && typeof launch.console === 'object' ? launch.console as ConsoleItem : undefined,
+  );
+});
 
 function clearLoginFeedback(): void {
   disposeLoginCode();

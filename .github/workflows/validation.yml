@@ -90,3 +90,36 @@ jobs:
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - run: cargo build --locked --manifest-path backend-windows/Cargo.toml --bin xjaus_backend
       - run: cargo test --locked --manifest-path backend-windows/Cargo.toml
+
+  linux-kde-frontend:
+    name: Linux KDE build and RPM candidate
+    runs-on: ubuntu-24.04
+    container: fedora:44
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install Qt and KDE Frameworks build dependencies
+        run: dnf -y install cargo cmake gcc-c++ extra-cmake-modules kf6-kirigami-devel libsecret-devel nodejs npm qt6-qtbase-devel qt6-qtdeclarative-devel qt6-qtquickcontrols2-devel qt6-qtwebchannel-devel qt6-qtwebengine-devel rpm-build webkit2gtk4.1-devel python3 xorg-x11-server-Xvfb xauth
+      - name: Build shared web renderer
+        run: npm ci && npm run build
+      - name: Build Rust sidecar
+        run: cargo build --locked --release --manifest-path src-tauri/Cargo.toml --bin xjaus_backend
+      - name: Configure KDE frontend
+        run: cmake -S kde-linux -B build/kde-linux -DCMAKE_BUILD_TYPE=Release -DXJAUS_DISCOVERY_SMOKE=ON -DXJAUS_BACKEND_PATH="$GITHUB_WORKSPACE/src-tauri/target/release/xjaus_backend"
+      - name: Build KDE frontend
+        run: cmake --build build/kde-linux --parallel 2
+      - name: Verify console discovery through Qt
+        env:
+          QTWEBENGINE_DISABLE_SANDBOX: "1"
+          QT_QUICK_BACKEND: software
+        run: xvfb-run -a ctest --test-dir build/kde-linux --output-on-failure
+      - name: Package Fedora candidate
+        run: cpack --config build/kde-linux/CPackConfig.cmake -B release/linux-kde
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xjaus-kde-fedora-rpm
+          path: release/linux-kde/*.rpm
+          if-no-files-found: error
+          retention-days: 7

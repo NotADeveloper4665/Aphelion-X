@@ -154,6 +154,32 @@ impl Default for DeviceProfile {
     }
 }
 
+/// Device identity used by the established Xbox browser client for listing
+/// xHome servers. Keep it separate from the native profile used for stream
+/// session negotiation; mixing XboxComBrowser with Microsoft.GamingApp can
+/// make /v6/servers/home return no targets.
+pub fn home_discovery_device_info() -> Value {
+    json!({
+        "appInfo": { "env": {
+            "clientAppId": "www.xbox.com",
+            "clientAppType": "browser",
+            "clientAppVersion": "21.1.98",
+            "clientSdkVersion": "8.5.3",
+            "httpEnvironment": "prod",
+            "sdkInstallId": ""
+        } },
+        "dev": {
+            "hw": { "make": "Microsoft", "model": "unknown", "sdktype": "web" },
+            "os": { "name": "windows", "ver": "22631.2715", "platform": "desktop" },
+            "displayInfo": {
+                "dimensions": { "widthInPixels": 1920, "heightInPixels": 1080 },
+                "pixelDensity": { "dpiX": 2, "dpiY": 2 }
+            },
+            "browser": { "browserName": "chrome", "browserVersion": "119.0" }
+        }
+    })
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct DeviceProfilePatch {
     pub client_app_id: Option<String>,

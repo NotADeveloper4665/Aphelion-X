@@ -29,7 +29,7 @@ mod connection_cancel;
 mod console_presence;
 #[path = "../instance_guard.rs"]
 mod instance_guard;
-#[cfg(all(test, not(windows)))]
+#[cfg(any(target_os = "linux", all(test, not(windows))))]
 #[path = "../logout_barrier.rs"]
 mod logout_barrier;
 #[cfg_attr(windows, path = "../profile_windows.rs")]
@@ -50,6 +50,8 @@ mod subscription;
 mod vault;
 #[path = "../wake.rs"]
 mod wake;
+#[path = "../xhome_discovery.rs"]
+mod xhome_discovery;
 
 #[cfg(windows)]
 #[path = "../windows_fs.rs"]
@@ -82,7 +84,10 @@ use std::{
     time::Duration,
 };
 
+const IPC_API_VERSION: u16 = 1;
+
 const COMMANDS: &[&str] = &[
+    "backend_status",
     "auth_status",
     "begin_login_window",
     "poll_login",
@@ -187,6 +192,22 @@ struct Backend {
     profile_cache: profile::ProfileCache,
     logout_guards: Vec<connection_cancel::bounded_registry::Guard>,
 }
+
+fn session_state_label(state: session::SessionState) -> &'static str {
+    match state {
+        session::SessionState::Idle => "idle",
+        session::SessionState::Starting => "starting",
+        session::SessionState::Provisioning => "provisioning",
+        session::SessionState::ReadyToConnect => "ready-to-connect",
+        session::SessionState::WaitingForResources => "waiting-for-resources",
+        session::SessionState::Provisioned => "provisioned",
+        session::SessionState::Negotiating => "negotiating",
+        session::SessionState::Connected => "connected",
+        session::SessionState::Stopped => "stopped",
+        session::SessionState::Failed => "failed",
+    }
+}
+
 async fn complete_login_timed(
     client: &Client,
     pending: &PendingLogin,
@@ -361,7 +382,7 @@ impl Backend {
         json!({"authenticated": primary.tokens.is_some(),
             "account": if primary.tokens.is_some() { "Xbox account" } else { "" },
             "catalogAccountScope": primary.tokens.as_ref().and_then(|t| account_scope::catalog_account_scope(&t.web_token)),
-            "storage": "memory (session only)"})
+            "storage": if primary.tokens.is_some() && cfg!(target_os = "linux") { "system keyring" } else if primary.tokens.is_some() { "memory only" } else { "not signed in" }})
     }
     async fn scoped_dispatch(
         &mut self,
@@ -589,6 +610,43 @@ impl Backend {
             None => self.auth_gate.capture()?,
         };
         match cmd {
+            "backend_status" => {
+                let authenticated = self.primary.lock().unwrap().tokens.is_some();
+                let pending_cleanup = self.cleanup.pending.load(Ordering::SeqCst);
+                let cleanup_uncertain = self.cleanup.uncertain.load(Ordering::SeqCst);
+                let session = self.stream.as_ref().map(|stream| {
+                    let snapshot = stream.snapshot();
+                    json!({
+                        "state": session_state_label(snapshot.state),
+                        "kind": snapshot.kind.route(),
+                        "active": snapshot.session_id.is_some()
+                    })
+                }).unwrap_or_else(|| json!({"state": "idle", "kind": null, "active": false}));
+                Ok(json!({
+                    "service": "xjaus-backend",
+                    "ready": true,
+                    "version": env!("CARGO_PKG_VERSION"),
+                    "platform": std::env::consts::OS,
+                    "apiVersion": IPC_API_VERSION,
+                    "capabilities": [
+                        "authentication",
+                        "settings",
+                        "console-presence",
+                        "remote-play",
+                        "cloud-streaming",
+                        "connection-cancellation"
+                    ],
+                    "health": {
+                        "service": "ready",
+                        "authentication": if authenticated { "authenticated" } else { "signed-out" },
+                        "session": session,
+                        "cleanup": {
+                            "state": if cleanup_uncertain { "uncertain" } else if pending_cleanup > 0 { "pending" } else { "clear" },
+                            "pendingOperations": pending_cleanup
+                        }
+                    }
+                }))
+            },
             "load_settings" => serde_json::to_value(settings::load_at(&settings::root()?)?)
                 .map_err(|_| "Ajustes no disponibles".into()),
             "save_settings" => {
@@ -599,6 +657,30 @@ impl Backend {
                 Ok(Value::Null)
             }
             "auth_status" => Ok(self.status()),
+            "load_session" => {
+                if self.primary.lock().unwrap().tokens.is_some() {
+                    return Ok(self.status());
+                }
+                #[cfg(all(target_os = "linux", not(test)))]
+                let saved = vault::load()?;
+                #[cfg(any(not(target_os = "linux"), test))]
+                let saved: Option<TokenBundle> = None;
+                let Some(saved) = saved else {
+                    return Ok(self.status());
+                };
+                let vault_generation = vault::generation()?;
+                let mut changes = self.auth_gate.subscribe();
+                let refreshed = tokio::select! {
+                    _ = self.auth_gate.invalidated(&mut changes, operation_epoch) => return Err(auth_gate::INVALIDATED.into()),
+                    result = auth::refresh_bundle(&self.client, &saved) => result.map_err(|e| e.to_string())?,
+                };
+                self.auth_gate.commit(operation_epoch, || {
+                    vault::save_if_generation(&refreshed, &saved, vault_generation)?;
+                    self.primary.lock().unwrap().tokens = Some(Arc::new(refreshed));
+                    Ok::<_, String>(())
+                })?;
+                Ok(self.status())
+            }
             "cancel_login" => {
                 if args.get("__xjausCancelApplied").and_then(Value::as_bool) == Some(true) {
                     self.primary.lock().unwrap().pending = None;
@@ -675,7 +757,7 @@ impl Backend {
                                     Ok::<_, String>(stored)
                                 })?;
                                 if stored.is_err() {
-                                    return Err("Autenticado, pero no fue posible guardar la sesión; permanece en memoria".into());
+                                    return Err("Authentication succeeded, but the system keyring could not save the session. Unlock or enable the keyring, then sign in again.".into());
                                 }
                                 Ok(self.status())
                             }
@@ -714,9 +796,11 @@ impl Backend {
                     }
                 }
             }
-            "load_session" => Err("Session restoration is disabled; sign in again".into()),
             "persist_session" => {
-                Err("Session persistence is disabled; sessions are memory only".into())
+                let current = self.tokens()?;
+                #[cfg(all(target_os = "linux", not(test)))]
+                vault::save(&current)?;
+                Ok(self.status())
             }
             "refresh_session" => {
                 let epoch = operation_epoch;
@@ -803,7 +887,7 @@ impl Backend {
                     zeroize::Zeroizing::new(format!("XBL3.0 x={hash};{}", token.as_str()))
                 };
                 let devices = get_json(&self.client, "https://xccs.xboxlive.com/lists/devices?queryCurrentDevice=false&includeStorageDevices=true".into(), Some(&auth), false,
-                    &[("x-xbl-contract-version", "4"), ("skillplatform", "RemoteManagement"), ("Cache-Control", "no-store, no-cache, must-revalidate"), ("Pragma", "no-cache")]).await?;
+                    &[("Accept-Language", "en-US"), ("x-xbl-contract-version", "2"), ("x-xbl-client-name", "XboxApp"), ("x-xbl-client-type", "UWA"), ("x-xbl-client-version", "39.39.22001.0"), ("Cache-Control", "no-store, no-cache, must-revalidate"), ("Pragma", "no-cache")]).await?;
                 Ok(console_presence::refresh(&self.client, &auth, devices).await)
             }
             "list_streaming_servers" | "list_cloud_titles" => {
@@ -821,28 +905,28 @@ impl Backend {
                     kind: SessionKind,
                     epoch: u64,
                 ) -> Result<Value, String> {
-                    let (host, bearer, path) = {
+                    async fn list_once(
+                        client: &Client,
+                        backend: &Backend,
+                        kind: SessionKind,
+                    ) -> Result<Value, String> {
                         let bundle = backend.tokens()?;
-                        let token = Backend::streaming_token(&bundle, kind)?;
-                        let host = region_host(token)?;
-                        let bearer = text_field(token, "gsToken")?;
-                        let path = if kind == SessionKind::Cloud {
-                            "/v2/titles"
-                        } else {
-                            "/v6/servers/home"
-                        };
-                        (host, bearer, path)
-                    };
-                    let url = format!("https://{host}{path}");
-                    let headers: &[(&str, &str)] = if kind == SessionKind::Home {
-                        &[
-                            ("Cache-Control", "no-store, no-cache, must-revalidate"),
-                            ("Pragma", "no-cache"),
-                        ]
-                    } else {
-                        &[]
-                    };
-                    match get_json(client, url.clone(), Some(&bearer), true, headers).await {
+                        let token = Backend::streaming_token(&bundle, kind)?.clone();
+                        if kind == SessionKind::Home {
+                            return xhome_discovery::list_servers(client, &token).await;
+                        }
+                        let host = region_host(&token)?;
+                        let bearer = text_field(&token, "gsToken")?;
+                        get_json(
+                            client,
+                            format!("https://{host}/v2/titles"),
+                            Some(&bearer),
+                            true,
+                            &[],
+                        )
+                        .await
+                    }
+                    match list_once(client, backend, kind).await {
                         Ok(value) => Ok(value),
                         Err(error) if error.contains("HTTP 401") => {
                             let vault_generation = vault::generation()?;
@@ -855,20 +939,8 @@ impl Backend {
                                 backend.primary.lock().unwrap().tokens = Some(Arc::new(updated));
                                 Ok::<_, String>(())
                             })?;
-                            let bundle = backend.tokens()?;
-                            let token = Backend::streaming_token(&bundle, kind)?;
-                            let host = region_host(token)?;
-                            let bearer = text_field(token, "gsToken")?;
-                            // F7: reintentar contra la región del bundle
-                            // renovado, no contra la URL previa al refresh.
-                            get_json(
-                                client,
-                                format!("https://{host}{path}"),
-                                Some(&bearer),
-                                true,
-                                headers,
-                            )
-                            .await
+                            // Recompute all xHome regions from the refreshed token.
+                            list_once(client, backend, kind).await
                         }
                         Err(error) => Err(error),
                     }
@@ -904,7 +976,13 @@ impl Backend {
                 let (host, bearer) = {
                     let bundle = self.tokens()?;
                     let token = Self::streaming_token(&bundle, kind)?;
-                    (region_host(token)?, text_field(token, "gsToken")?)
+                    let requested_region = start.get("regionHost").and_then(Value::as_str);
+                    let host = if kind == SessionKind::Home {
+                        region_host_for(token, requested_region)?
+                    } else {
+                        region_host(token)?
+                    };
+                    (host, text_field(token, "gsToken")?)
                 };
                 let mut stream =
                     SessionClient::new(self.client.clone(), host, bearer, kind, profile);
@@ -1131,6 +1209,24 @@ fn text_field(value: &Value, key: &str) -> Result<String, String> {
         .map(str::to_owned)
         .ok_or_else(|| format!("Falta {key} en la respuesta Xbox"))
 }
+fn region_host_for(token: &Value, requested: Option<&str>) -> Result<String, String> {
+    let Some(requested) = requested.filter(|host| !host.is_empty()) else {
+        return region_host(token);
+    };
+    let regions = token.pointer("/offeringSettings/regions").and_then(Value::as_array)
+        .ok_or("The Xbox token has no regions")?;
+    for region in regions {
+        let Some(base_uri) = region.get("baseUri").and_then(Value::as_str) else { continue; };
+        let Ok(url) = Url::parse(base_uri) else { continue; };
+        let Some(host) = url.host_str() else { continue; };
+        if url.scheme() == "https" && host == requested
+            && (host == "xboxlive.com" || host.ends_with(".xboxlive.com")) {
+            return Ok(host.to_owned());
+        }
+    }
+    Err("The selected Remote Play region is not authorized by the Xbox token".into())
+}
+
 fn region_host(token: &Value) -> Result<String, String> {
     let regions = token
         .pointer("/offeringSettings/regions")
@@ -1183,6 +1279,8 @@ async fn get_json(
 }
 #[derive(Deserialize)]
 struct Request {
+    #[serde(default)]
+    api_version: Option<u16>,
     id: u64,
     cmd: String,
     #[serde(default)]
@@ -1524,6 +1622,13 @@ impl RequestQueue {
     }
 }
 
+fn request_version_error(version: Option<u16>) -> Option<String> {
+    match version {
+        None | Some(IPC_API_VERSION) => None,
+        Some(_) => Some("Unsupported IPC API version".into()),
+    }
+}
+
 fn enqueue_request(
     queue: &RequestQueue,
     gate: &auth_gate::AuthGate,
@@ -1682,6 +1787,14 @@ fn main() {
             let Ok(request) = serde_json::from_str::<Request>(&line) else {
                 continue;
             };
+            if let Some(error) = request_version_error(request.api_version) {
+                let response = json!({"api_version": IPC_API_VERSION, "id": request.id, "error": error});
+                let mut stdout = io::stdout().lock();
+                if writeln!(stdout, "{response}").is_err() || stdout.flush().is_err() {
+                    break false;
+                }
+                continue;
+            }
             if let Err(request) = enqueue_request(
                 &reader_requests,
                 &reader_auth_gate,
@@ -1690,7 +1803,7 @@ fn main() {
                 &reader_keepalive,
                 request,
             ) {
-                let response = json!({"id":request.id, "error":"IPC queue full"});
+                let response = json!({"api_version": IPC_API_VERSION, "id":request.id, "error":"IPC queue full"});
                 let mut stdout = io::stdout().lock();
                 if writeln!(stdout, "{response}").is_err() || stdout.flush().is_err() {
                     break false;
@@ -1828,14 +1941,31 @@ fn dispatch_requests(
 
 fn dispatch_response(request_id: u64, result: Result<Value, String>) -> Value {
     match result {
-        Ok(value) => json!({"id": request_id, "result": value}),
-        Err(error) => json!({"id": request_id, "error": error}),
+        Ok(value) => json!({"api_version": IPC_API_VERSION, "id": request_id, "result": value}),
+        Err(error) => json!({"api_version": IPC_API_VERSION, "id": request_id, "error": error}),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn remote_play_region_must_match_the_xbox_token() {
+        let token = json!({"offeringSettings":{"regions":[
+            {"isDefault":true,"baseUri":"https://default.core.gssv-play.xboxlive.com"},
+            {"name":"WestUS2","baseUri":"https://wus2.core.gssv-play-prodxhome.xboxlive.com"}
+        ]}});
+        assert_eq!(
+            region_host_for(&token, Some("wus2.core.gssv-play-prodxhome.xboxlive.com")).unwrap(),
+            "wus2.core.gssv-play-prodxhome.xboxlive.com"
+        );
+        assert!(region_host_for(&token, Some("attacker.example")).is_err());
+        assert_eq!(
+            region_host_for(&token, None).unwrap(),
+            "default.core.gssv-play.xboxlive.com"
+        );
+    }
+
     #[test]
     fn queued_begin_pins_admission_without_claiming_it() {
         use std::time::{Duration, Instant};
@@ -3854,6 +3984,7 @@ while True:
             };
             let attempt_id = "new-login-attempt";
             let mut request = Request {
+                api_version: Some(1),
                 id: 1,
                 cmd: "begin_login_window".into(),
                 args: json!({"attemptId":attempt_id}),
@@ -3888,6 +4019,7 @@ while True:
             let attempt_id = "existing-login-attempt";
             backend.auth_gate.begin_attempt(attempt_id).unwrap();
             let mut request = Request {
+                api_version: Some(1),
                 id: 2,
                 cmd: "poll_login".into(),
                 args: json!({"attemptId":attempt_id}),
@@ -3902,6 +4034,28 @@ while True:
                 .await;
             assert_eq!(result.unwrap_err(), "Inicia sesión primero");
         });
+    }
+
+    #[test]
+    fn ipc_api_version_accepts_legacy_requests_and_v1() {
+        assert_eq!(request_version_error(None), None);
+        assert_eq!(request_version_error(Some(1)), None);
+    }
+
+    #[test]
+    fn ipc_api_version_rejects_unknown_versions_without_dispatch() {
+        assert_eq!(
+            request_version_error(Some(2)).as_deref(),
+            Some("Unsupported IPC API version")
+        );
+        assert_eq!(request_version_error(Some(0)).as_deref(), Some("Unsupported IPC API version"));
+    }
+
+    #[test]
+    fn ipc_responses_include_supported_api_version() {
+        let response = dispatch_response(7, Ok(json!({"authenticated": false})));
+        assert_eq!(response["api_version"], IPC_API_VERSION);
+        assert_eq!(response["id"], 7);
     }
 
     #[test]

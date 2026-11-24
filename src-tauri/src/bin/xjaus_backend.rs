@@ -3871,6 +3871,7 @@ while True:
             };
             let attempt_id = "new-login-attempt";
             let mut request = Request {
+                api_version: Some(1),
                 id: 1,
                 cmd: "begin_login_window".into(),
                 args: json!({"attemptId":attempt_id}),
@@ -3905,6 +3906,7 @@ while True:
             let attempt_id = "existing-login-attempt";
             backend.auth_gate.begin_attempt(attempt_id).unwrap();
             let mut request = Request {
+                api_version: Some(1),
                 id: 2,
                 cmd: "poll_login".into(),
                 args: json!({"attemptId":attempt_id}),

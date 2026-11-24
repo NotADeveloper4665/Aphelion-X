@@ -11,7 +11,8 @@ responses = {
     ],
     "list_streaming_servers": {
         "continuationToken": None,
-        "results": [{"name": "Fixture Xbox", "serverId": "streaming-fixture-id"}],
+        "results": [{"name": "Fixture Xbox", "serverId": "streaming-fixture-id",
+            "_xjausRegionHost": "wus2.core.gssv-play-prodxhome.xboxlive.com"}],
         "totalItems": 1,
     },
 }

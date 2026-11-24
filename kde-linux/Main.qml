@@ -581,7 +581,8 @@ Kirigami.ApplicationWindow {
 
         ColumnLayout {
             anchors.centerIn: parent
-            width: Math.min(parent.width - 2 * Kirigami.Units.largeSpacing, 560)
+            width: Math.min(parent.width - 2 * Kirigami.Units.largeSpacing,
+                            root.currentSection === "player" ? 1280 : 560)
             spacing: Kirigami.Units.largeSpacing
 
             Kirigami.Icon {
@@ -694,6 +695,7 @@ Kirigami.ApplicationWindow {
                 StackLayout {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
+                    Layout.minimumHeight: root.currentSection === "player" ? Math.max(240, root.height - 300) : 0
                     currentIndex: root.currentSection === "player" ? 4
                         : root.currentSection === "consoles" ? 1
                         : root.currentSection === "cloud" ? 2
@@ -761,43 +763,31 @@ Kirigami.ApplicationWindow {
                             opacity: 0.8
                         }
                         ListView {
+                            id: remotePlayList
+                            readonly property real rowHeight: Kirigami.Units.gridUnit * 2.5
+
                             Layout.fillWidth: true
-                            Layout.fillHeight: true
+                            Layout.preferredHeight: Math.min(consoleModel.count, 3) * rowHeight
                             clip: true
                             model: consoleModel
-                            delegate: Controls.ItemDelegate {
+
+                            delegate: Controls.Button {
+                                required property string name
+                                required property string powerState
+                                required property string deviceId
+                                readonly property string target: root.streamingTargetFor(name)
+
                                 width: ListView.view.width
-                                text: name + " · " + powerState
-                                enabled: root.streamingTargetFor(name).length > 0
-                                onClicked: {
-                                    const target = root.streamingTargetFor(name)
-                                    if (!target) {
-                                        root.serverMessage = "No matching Remote Play target was found. Refresh both lists and try again."
-                                        return
-                                    }
-                                    root.launchNativeStream("home", target, name, null, {
-                                        id: deviceId,
-                                        name,
-                                        powerState
-                                    })
-                                }
+                                height: remotePlayList.rowHeight
+                                text: target ? "Play " + name : name + " · Unavailable"
+                                icon.name: "media-playback-start"
+                                enabled: backend.available && target.length > 0
+                                onClicked: root.launchNativeStream("home", target, name, null, {
+                                    id: deviceId,
+                                    name,
+                                    powerState
+                                })
                             }
-                        }
-                        ListView {
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: Math.min(contentHeight, 140)
-                            clip: true
-                            model: serverModel
-                            delegate: Controls.ItemDelegate {
-                                width: ListView.view.width
-                                text: name + (serverId.length ? " · " + serverId : "")
-                                enabled: false
-                            }
-                        }
-                        Kirigami.InlineMessage {
-                            Layout.fillWidth: true
-                            type: Kirigami.MessageType.Information
-                            text: "Remote Play launches through the shared Xbox session and WebRTC path inside the native KDE player."
                         }
                     }
 

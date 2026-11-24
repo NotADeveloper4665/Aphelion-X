@@ -18,7 +18,8 @@ constexpr qsizetype kMaxPending = 64;
 
 bool commandAllowed(const QString &command)
 {
-    return command == QStringLiteral("auth_status")
+    return command == QStringLiteral("backend_status")
+        || command == QStringLiteral("auth_status")
         || command == QStringLiteral("load_settings")
         || command == QStringLiteral("save_settings")
         || command == QStringLiteral("list_consoles_smartglass")

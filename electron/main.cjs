@@ -186,7 +186,7 @@ ipcMain.handle('xjaus:invoke', (event, command, args) => {
   }
   const id = ++sequence;
   const startedAt = Date.now();
-  const message = JSON.stringify({ id, cmd: command, args: args ?? {} });
+  const message = JSON.stringify({ api_version: 1, id, cmd: command, args: args ?? {} });
   const bytes = Buffer.byteLength(message, 'utf8');
   if (bytes > 2_000_000) throw new Error('Petición IPC demasiado grande');
   if (!backend || backend.exitCode !== null || !backend.stdin.writable) throw new Error('Backend Rust no disponible');

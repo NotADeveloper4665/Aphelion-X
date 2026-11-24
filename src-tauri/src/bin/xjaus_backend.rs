@@ -1541,15 +1541,9 @@ fn enqueue_request(
     primary: &AuthSlot,
     cancellations: &connection_cancel::ConnectionCancellation,
     keepalive: &KeepaliveGate,
-    mut request: Request,
+    request: Request,
 ) -> Result<(), Box<Request>> {
-    if let Some(error) = request_version_error(request.api_version) {
-        request.pre_dispatch_error = Some(error);
-    }
     queue.push(request, |request| {
-        if request.pre_dispatch_error.is_some() {
-            return;
-        }
         let stamp = if request.cmd == "logout" {
             // The queue has reserved the priority slot. No dispatcher-owned
             // work or I/O may hold the auth commit or primary slot locks.
@@ -1699,6 +1693,14 @@ fn main() {
             let Ok(request) = serde_json::from_str::<Request>(&line) else {
                 continue;
             };
+            if let Some(error) = request_version_error(request.api_version) {
+                let response = json!({"api_version": IPC_API_VERSION, "id": request.id, "error": error});
+                let mut stdout = io::stdout().lock();
+                if writeln!(stdout, "{response}").is_err() || stdout.flush().is_err() {
+                    break false;
+                }
+                continue;
+            }
             if let Err(request) = enqueue_request(
                 &reader_requests,
                 &reader_auth_gate,

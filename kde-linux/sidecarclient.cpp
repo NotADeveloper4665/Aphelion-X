@@ -11,6 +11,7 @@
 #include <QJsonParseError>
 #include <QRegularExpression>
 #include <QUrl>
+#include <QUuid>
 #include <QWindow>
 
 
@@ -130,6 +131,11 @@ QUrl SidecarClient::frontendUrl() const
             return QUrl::fromLocalFile(info.absoluteFilePath());
     }
     return {};
+}
+
+QString SidecarClient::createAttemptId() const
+{
+    return QUuid::createUuid().toString(QUuid::WithoutBraces);
 }
 
 void SidecarClient::setStatusMessage(const QString &message)

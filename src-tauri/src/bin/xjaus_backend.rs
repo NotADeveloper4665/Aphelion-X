@@ -190,6 +190,22 @@ struct Backend {
     profile_cache: profile::ProfileCache,
     logout_guards: Vec<connection_cancel::bounded_registry::Guard>,
 }
+
+fn session_state_label(state: session::SessionState) -> &'static str {
+    match state {
+        session::SessionState::Idle => "idle",
+        session::SessionState::Starting => "starting",
+        session::SessionState::Provisioning => "provisioning",
+        session::SessionState::ReadyToConnect => "ready-to-connect",
+        session::SessionState::WaitingForResources => "waiting-for-resources",
+        session::SessionState::Provisioned => "provisioned",
+        session::SessionState::Negotiating => "negotiating",
+        session::SessionState::Connected => "connected",
+        session::SessionState::Stopped => "stopped",
+        session::SessionState::Failed => "failed",
+    }
+}
+
 async fn complete_login_timed(
     client: &Client,
     pending: &PendingLogin,
@@ -592,21 +608,43 @@ impl Backend {
             None => self.auth_gate.capture()?,
         };
         match cmd {
-            "backend_status" => Ok(json!({
-                "service": "xjaus-backend",
-                "ready": true,
-                "version": env!("CARGO_PKG_VERSION"),
-                "platform": std::env::consts::OS,
-                "apiVersion": IPC_API_VERSION,
-                "capabilities": [
-                    "authentication",
-                    "settings",
-                    "console-presence",
-                    "remote-play",
-                    "cloud-streaming",
-                    "connection-cancellation"
-                ]
-            })),
+            "backend_status" => {
+                let authenticated = self.primary.lock().unwrap().tokens.is_some();
+                let pending_cleanup = self.cleanup.pending.load(Ordering::SeqCst);
+                let cleanup_uncertain = self.cleanup.uncertain.load(Ordering::SeqCst);
+                let session = self.stream.as_ref().map(|stream| {
+                    let snapshot = stream.snapshot();
+                    json!({
+                        "state": session_state_label(snapshot.state),
+                        "kind": snapshot.kind.route(),
+                        "active": snapshot.session_id.is_some()
+                    })
+                }).unwrap_or_else(|| json!({"state": "idle", "kind": null, "active": false}));
+                Ok(json!({
+                    "service": "xjaus-backend",
+                    "ready": true,
+                    "version": env!("CARGO_PKG_VERSION"),
+                    "platform": std::env::consts::OS,
+                    "apiVersion": IPC_API_VERSION,
+                    "capabilities": [
+                        "authentication",
+                        "settings",
+                        "console-presence",
+                        "remote-play",
+                        "cloud-streaming",
+                        "connection-cancellation"
+                    ],
+                    "health": {
+                        "service": "ready",
+                        "authentication": if authenticated { "authenticated" } else { "signed-out" },
+                        "session": session,
+                        "cleanup": {
+                            "state": if cleanup_uncertain { "uncertain" } else if pending_cleanup > 0 { "pending" } else { "clear" },
+                            "pendingOperations": pending_cleanup
+                        }
+                    }
+                }))
+            },
             "load_settings" => serde_json::to_value(settings::load_at(&settings::root()?)?)
                 .map_err(|_| "Ajustes no disponibles".into()),
             "save_settings" => {

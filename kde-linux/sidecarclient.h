@@ -21,6 +21,7 @@ public:
     bool available() const;
     QString statusMessage() const;
     QUrl frontendUrl() const;
+    Q_INVOKABLE QString createAttemptId() const;
 
     Q_INVOKABLE void start();
     Q_INVOKABLE qulonglong invoke(const QString &command, const QVariantMap &args = {});

@@ -90,7 +90,7 @@ Kirigami.ApplicationWindow {
     function startLogin() {
         if (!backend.available || loginStarting || polling)
             return
-        attemptId = Qt.createUuid().replace("{", "").replace("}", "")
+        attemptId = backend.createAttemptId()
         verificationUri = ""
         userCode = ""
         loginMessage = "Requesting a Microsoft sign-in code…"
@@ -229,12 +229,22 @@ Kirigami.ApplicationWindow {
 
         function onRequestFinished(id, command, result, error) {
             if (command === "backend_status" && id === root.backendStatusRequestId) {
-                root.backendHealthMessage = error.length > 0
-                    ? "Rust service health query failed."
-                    : (result.ready === true
-                        ? "Rust service ready · v" + String(result.version || "?")
-                            + " · " + String(result.platform || "platform unknown")
-                        : "Rust service did not report ready.")
+                if (error.length > 0) {
+                    root.backendHealthMessage = "Rust service health query failed."
+                    return
+                }
+                if (result.ready !== true) {
+                    root.backendHealthMessage = "Rust service did not report ready."
+                    return
+                }
+                const health = result.health || {}
+                const session = health.session || {}
+                const cleanup = health.cleanup || {}
+                root.backendHealthMessage = "Rust ready · "
+                    + String(health.authentication || "sign-in unknown")
+                    + " · stream " + String(session.state || "unknown")
+                    + " · cleanup " + String(cleanup.state || "unknown")
+                    + " · v" + String(result.version || "?")
                 return
             }
 
@@ -761,6 +771,7 @@ Kirigami.ApplicationWindow {
                             Controls.ComboBox {
                                 id: resolutionControl
                                 Kirigami.FormData.label: "Resolution"
+                                implicitWidth: 240
                                 model: ["1280x720", "1920x1080", "2560x1440"]
                                 currentIndex: 1
                             }
@@ -775,12 +786,14 @@ Kirigami.ApplicationWindow {
                             Controls.ComboBox {
                                 id: codecControl
                                 Kirigami.FormData.label: "Codec preference"
+                                implicitWidth: 240
                                 model: ["auto", "h264", "hevc"]
                                 currentIndex: 0
                             }
                             Controls.ComboBox {
                                 id: audioControl
                                 Kirigami.FormData.label: "Audio"
+                                implicitWidth: 240
                                 model: ["opus", "default"]
                                 currentIndex: 0
                             }

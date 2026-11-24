@@ -919,9 +919,7 @@ impl Backend {
                     // Greenlight's xHome client identifies itself and sends
                     // device metadata on this endpoint. Without those headers
                     // Xbox can answer successfully with an empty console list.
-                    let device_info = session::DeviceProfile::default()
-                        .device_info_header()
-                        .to_string();
+                    let device_info = session::home_discovery_device_info().to_string();
                     let home_headers = [
                         ("Accept", "application/json"),
                         ("Content-Type", "application/json"),

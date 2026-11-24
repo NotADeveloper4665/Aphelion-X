@@ -823,9 +823,7 @@ async fn list_streaming_servers(state: State<'_, AppState>) -> Result<Value, Str
     // Match the client headers used by Xbox's browser streaming API clients.
     // In particular, /v6/servers/home can return an empty list when these are
     // omitted even though the same account can see its console in Greenlight.
-    let device_info = session::DeviceProfile::default()
-        .device_info_header()
-        .to_string();
+    let device_info = session::home_discovery_device_info().to_string();
     let headers = [
         ("Accept", "application/json"),
         ("Content-Type", "application/json"),

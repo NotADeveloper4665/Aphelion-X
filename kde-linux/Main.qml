@@ -25,6 +25,20 @@ Kirigami.ApplicationWindow {
     property double pollRequestId: 0
     property double statusRequestId: 0
     property double logoutRequestId: 0
+    property double consolesRequestId: 0
+    property double serversRequestId: 0
+    property double cloudRequestId: 0
+    property double settingsLoadRequestId: 0
+    property double settingsSaveRequestId: 0
+    property string currentSection: "home"
+    property string consoleMessage: "Consoles have not been loaded."
+    property string serverMessage: "Streaming servers have not been loaded."
+    property string cloudMessage: "Load the Cloud catalog when ready."
+    property string settingsMessage: "Settings have not been loaded."
+    property var settings: ({
+        resolution: "1920x1080", bitrate: 30000, codec: "auto",
+        audio: "opus", audioGain: 1
+    })
 
     function startLogin() {
         if (!backend.available || loginStarting || polling)
@@ -56,9 +70,56 @@ Kirigami.ApplicationWindow {
         loginMessage = "Sign-in cancelled."
     }
 
+    function records(value) {
+        if (Array.isArray(value))
+            return value
+        if (!value || typeof value !== "object")
+            return []
+        for (const key of ["result", "servers", "results", "devices", "consoles"]) {
+            if (Array.isArray(value[key]))
+                return value[key]
+        }
+        return []
+    }
+
+    function showSection(section) {
+        currentSection = section
+        if (section === "consoles")
+            loadConsoles()
+        else if (section === "cloud")
+            loadCloud()
+        else if (section === "settings")
+            loadSettings()
+    }
+
+    function loadConsoles() {
+        if (!authenticated || !backend.available)
+            return
+        consoleMessage = "Loading console presence…"
+        serverMessage = "Loading Remote Play targets…"
+        consolesRequestId = backend.invoke("list_consoles_smartglass")
+        serversRequestId = backend.invoke("list_streaming_servers")
+    }
+
+    function loadCloud() {
+        if (!authenticated || !backend.available)
+            return
+        cloudMessage = "Loading the Cloud catalog…"
+        cloudRequestId = backend.invoke("list_cloud_titles")
+    }
+
+    function loadSettings() {
+        if (!backend.available)
+            return
+        settingsMessage = "Loading saved settings…"
+        settingsLoadRequestId = backend.invoke("load_settings")
+    }
+
     function applyAuthStatus(result) {
-        authenticated = result.authenticated === true
+        authenticated = result && result.authenticated === true
         if (authenticated) {
+            loadSettings()
+            loadConsoles()
             pollTimer.stop()
             polling = false
             loginStarting = false
@@ -112,6 +173,104 @@ Kirigami.ApplicationWindow {
                 root.authenticated = false
                 root.loginMessage = "Signed out locally. This does not confirm server-side token revocation."
                 root.statusRequestId = backend.invoke("auth_status")
+                return
+            }
+
+            if (command === "list_consoles_smartglass" && id === root.consolesRequestId) {
+                if (error.length > 0) {
+                    root.consoleMessage = "Could not load console presence."
+                    return
+                }
+                const items = root.records(result)
+                consoleModel.clear()
+                for (const item of items) {
+                    if (!item || typeof item !== "object")
+                        continue
+                    consoleModel.append({
+                        name: String(item.name || item.deviceName || "Xbox console"),
+                        powerState: String(item.powerState || "Unknown"),
+                        deviceId: String(item.id || "")
+                    })
+                }
+                root.consoleMessage = items.length
+                    ? items.length + " console record(s) returned."
+                    : "No console records were returned."
+                return
+            }
+
+            if (command === "list_streaming_servers" && id === root.serversRequestId) {
+                if (error.length > 0) {
+                    root.serverMessage = "Could not load Remote Play targets."
+                    return
+                }
+                const items = root.records(result)
+                serverModel.clear()
+                for (const item of items) {
+                    if (!item || typeof item !== "object")
+                        continue
+                    serverModel.append({
+                        name: String(item.name || item.deviceName || "Streaming target"),
+                        serverId: String(item.serverId || item.id || "")
+                    })
+                }
+                root.serverMessage = items.length
+                    ? items.length + " Remote Play target(s) returned."
+                    : "No Remote Play targets were returned."
+                return
+            }
+
+            if (command === "list_cloud_titles" && id === root.cloudRequestId) {
+                if (error.length > 0) {
+                    root.cloudMessage = "Could not load the Cloud catalog."
+                    return
+                }
+                const items = root.records(result)
+                cloudModel.clear()
+                for (const item of items) {
+                    if (!item || typeof item !== "object")
+                        continue
+                    const details = item.details || {}
+                    const titleId = String(item.titleId || item.id || "")
+                    if (!titleId)
+                        continue
+                    cloudModel.append({
+                        name: String(item.name || details.title || details.name || titleId),
+                        titleId
+                    })
+                }
+                root.cloudMessage = items.length
+                    ? items.length + " catalog record(s) returned."
+                    : "No catalog records were returned."
+                return
+            }
+
+            if (command === "load_settings" && id === root.settingsLoadRequestId) {
+                if (error.length > 0) {
+                    root.settingsMessage = "Could not load settings; defaults are shown."
+                    return
+                }
+                const saved = result || {}
+                root.settings = {
+                    resolution: saved.resolution || "1920x1080",
+                    bitrate: Number(saved.bitrate) || 30000,
+                    codec: saved.codec || "auto",
+                    audio: saved.audio || "opus",
+                    audioGain: Number(saved.audioGain) || 1
+                }
+                resolutionControl.currentIndex = resolutionControl.find(root.settings.resolution)
+                codecControl.currentIndex = codecControl.find(root.settings.codec)
+                audioControl.currentIndex = audioControl.find(root.settings.audio)
+                bitrateControl.value = root.settings.bitrate / 1000
+                gainControl.value = root.settings.audioGain
+                root.settingsMessage = "Settings loaded."
+                return
+            }
+
+            if (command === "save_settings" && id === root.settingsSaveRequestId) {
+                root.settingsSaveRequestId = 0
+                root.settingsMessage = error.length > 0
+                    ? "Could not save settings."
+                    : "Settings saved."
                 return
             }
 
@@ -185,6 +344,38 @@ Kirigami.ApplicationWindow {
         }
     }
 
+    globalDrawer: Kirigami.GlobalDrawer {
+        title: "XJAUS"
+        isMenu: true
+        enabled: root.authenticated
+        actions: [
+            Kirigami.Action {
+                text: "Home"
+                icon.name: "go-home"
+                onTriggered: root.showSection("home")
+            },
+            Kirigami.Action {
+                text: "Consoles"
+                icon.name: "input-gaming"
+                onTriggered: root.showSection("consoles")
+            },
+            Kirigami.Action {
+                text: "Cloud Gaming"
+                icon.name: "applications-games"
+                onTriggered: root.showSection("cloud")
+            },
+            Kirigami.Action {
+                text: "Settings"
+                icon.name: "settings-configure"
+                onTriggered: root.showSection("settings")
+            }
+        ]
+    }
+
+    ListModel { id: consoleModel }
+    ListModel { id: serverModel }
+    ListModel { id: cloudModel }
+
     pageStack.initialPage: Kirigami.Page {
         title: "XJAUS"
         padding: Kirigami.Units.largeSpacing
@@ -215,6 +406,7 @@ Kirigami.ApplicationWindow {
             }
 
             Kirigami.Card {
+                visible: !root.authenticated
                 Layout.fillWidth: true
 
                 contentItem: ColumnLayout {
@@ -287,10 +479,239 @@ Kirigami.ApplicationWindow {
                 }
             }
 
+            ColumnLayout {
+                visible: root.authenticated
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                spacing: Kirigami.Units.mediumSpacing
+
+                Controls.Label {
+                    Layout.fillWidth: true
+                    text: "Signed in · authentication is held in memory"
+                    horizontalAlignment: Text.AlignHCenter
+                    opacity: 0.8
+                }
+
+                StackLayout {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    currentIndex: root.currentSection === "consoles" ? 1
+                        : root.currentSection === "cloud" ? 2
+                        : root.currentSection === "settings" ? 3 : 0
+
+                    Kirigami.Card {
+                        contentItem: ColumnLayout {
+                            spacing: Kirigami.Units.mediumSpacing
+                            Controls.Label {
+                                Layout.fillWidth: true
+                                text: "Welcome to XJAUS"
+                                font.pixelSize: 22
+                                font.weight: Font.DemiBold
+                            }
+                            Controls.Label {
+                                Layout.fillWidth: true
+                                text: "The Linux-native frontend is being migrated in small slices. Console presence, Cloud catalog browsing, and settings now use the existing Rust services. Stream playback is still on the current app."
+                                wrapMode: Text.Wrap
+                            }
+                            RowLayout {
+                                Layout.fillWidth: true
+                                Controls.Button {
+                                    Layout.fillWidth: true
+                                    text: "Consoles"
+                                    icon.name: "input-gaming"
+                                    onClicked: root.showSection("consoles")
+                                }
+                                Controls.Button {
+                                    Layout.fillWidth: true
+                                    text: "Cloud Gaming"
+                                    icon.name: "applications-games"
+                                    onClicked: root.showSection("cloud")
+                                }
+                                Controls.Button {
+                                    Layout.fillWidth: true
+                                    text: "Settings"
+                                    icon.name: "settings-configure"
+                                    onClicked: root.showSection("settings")
+                                }
+                            }
+                        }
+                    }
+
+                    ColumnLayout {
+                        spacing: Kirigami.Units.smallSpacing
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Controls.Label {
+                                Layout.fillWidth: true
+                                text: "Xbox Remote Play"
+                                font.pixelSize: 20
+                                font.weight: Font.DemiBold
+                            }
+                            Controls.Button {
+                                text: "Refresh"
+                                icon.name: "view-refresh"
+                                enabled: backend.available
+                                onClicked: root.loadConsoles()
+                            }
+                        }
+                        Controls.Label {
+                            Layout.fillWidth: true
+                            text: root.consoleMessage + " " + root.serverMessage
+                            wrapMode: Text.Wrap
+                            opacity: 0.8
+                        }
+                        ListView {
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            clip: true
+                            model: consoleModel
+                            delegate: Controls.ItemDelegate {
+                                width: ListView.view.width
+                                text: name + " · " + powerState
+                                enabled: false
+                            }
+                        }
+                        ListView {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: Math.min(contentHeight, 140)
+                            clip: true
+                            model: serverModel
+                            delegate: Controls.ItemDelegate {
+                                width: ListView.view.width
+                                text: name + (serverId.length ? " · " + serverId : "")
+                                enabled: false
+                            }
+                        }
+                        Kirigami.InlineMessage {
+                            Layout.fillWidth: true
+                            type: Kirigami.MessageType.Information
+                            text: "Remote Play playback and wake controls are not migrated yet; the existing app remains the working path."
+                        }
+                    }
+
+                    ColumnLayout {
+                        spacing: Kirigami.Units.smallSpacing
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Controls.Label {
+                                Layout.fillWidth: true
+                                text: "Cloud Gaming"
+                                font.pixelSize: 20
+                                font.weight: Font.DemiBold
+                            }
+                            Controls.Button {
+                                text: "Refresh"
+                                icon.name: "view-refresh"
+                                enabled: backend.available
+                                onClicked: root.loadCloud()
+                            }
+                        }
+                        Controls.Label {
+                            Layout.fillWidth: true
+                            text: root.cloudMessage
+                            wrapMode: Text.Wrap
+                            opacity: 0.8
+                        }
+                        ListView {
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            clip: true
+                            model: cloudModel
+                            delegate: Controls.ItemDelegate {
+                                width: ListView.view.width
+                                text: name
+                                enabled: false
+                            }
+                        }
+                        Kirigami.InlineMessage {
+                            Layout.fillWidth: true
+                            type: Kirigami.MessageType.Information
+                            text: "Game launch and the WebRTC player are not migrated yet; use the existing app for playback."
+                        }
+                    }
+
+                    ColumnLayout {
+                        spacing: Kirigami.Units.mediumSpacing
+                        Controls.Label {
+                            Layout.fillWidth: true
+                            text: "Streaming settings"
+                            font.pixelSize: 20
+                            font.weight: Font.DemiBold
+                        }
+                        Kirigami.FormLayout {
+                            Layout.fillWidth: true
+                            Controls.ComboBox {
+                                id: resolutionControl
+                                Kirigami.FormData.label: "Resolution"
+                                model: ["1280x720", "1920x1080", "2560x1440"]
+                                currentIndex: 1
+                            }
+                            Controls.Slider {
+                                id: bitrateControl
+                                Kirigami.FormData.label: "Bitrate: " + Math.round(value) + " Mbps"
+                                from: 15
+                                to: 45
+                                stepSize: 1
+                                value: 30
+                            }
+                            Controls.ComboBox {
+                                id: codecControl
+                                Kirigami.FormData.label: "Codec preference"
+                                model: ["auto", "h264", "hevc"]
+                                currentIndex: 0
+                            }
+                            Controls.ComboBox {
+                                id: audioControl
+                                Kirigami.FormData.label: "Audio"
+                                model: ["opus", "default"]
+                                currentIndex: 0
+                            }
+                            Controls.Slider {
+                                id: gainControl
+                                Kirigami.FormData.label: "Audio gain: " + value.toFixed(1) + "×"
+                                from: 1.0
+                                to: 1.5
+                                stepSize: 0.1
+                                value: 1.0
+                            }
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Controls.Label {
+                                Layout.fillWidth: true
+                                text: root.settingsMessage
+                                wrapMode: Text.Wrap
+                            }
+                            Controls.Button {
+                                text: "Reload"
+                                enabled: backend.available
+                                onClicked: root.loadSettings()
+                            }
+                            Controls.Button {
+                                text: root.settingsSaveRequestId ? "Saving…" : "Save"
+                                enabled: backend.available && root.settingsSaveRequestId === 0
+                                onClicked: {
+                                    const next = {
+                                        resolution: resolutionControl.currentText,
+                                        bitrate: Math.round(bitrateControl.value) * 1000,
+                                        codec: codecControl.currentText,
+                                        audio: audioControl.currentText,
+                                        audioGain: Number(gainControl.value.toFixed(1))
+                                    }
+                                    root.settingsSaveRequestId = backend.invoke(
+                                        "save_settings", { "settings": next })
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             Kirigami.InlineMessage {
+                visible: !root.authenticated
                 Layout.fillWidth: true
                 type: Kirigami.MessageType.Information
-                text: "This is the first Linux-native UI slice. Cloud catalog, console discovery, and streaming remain on the existing frontend until each screen is migrated and validated."
+                text: "This is the first Linux-native UI slice. The existing app remains the full-featured fallback until playback and remaining interactions are migrated."
             }
 
             Controls.Label {

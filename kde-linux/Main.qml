@@ -123,12 +123,29 @@ Kirigami.ApplicationWindow {
             return value
         if (!value || typeof value !== "object")
             return []
-        for (const key of ["result", "servers", "results", "devices", "consoles"]) {
-            if (Array.isArray(value[key]))
-                return value[key]
+        // Xbox endpoints have returned both array and object-shaped result
+        // envelopes. Prefer their known record containers before considering
+        // the envelope itself a single record.
+        for (const key of ["results", "result", "servers", "devices", "consoles", "items", "values"]) {
+            if (value[key] && typeof value[key] === "object") {
+                const nested = root.records(value[key])
+                if (nested.length > 0 || Array.isArray(value[key]))
+                    return nested
+            }
         }
-        if (value.result && typeof value.result === "object")
-            return root.records(value.result)
+
+        if (["serverId", "server_id", "id"].some(key => typeof value[key] === "string" && value[key].length > 0))
+            return [value]
+
+        const entries = Object.entries(value)
+        if (entries.length > 0 && entries.length <= 50
+                && entries.every(([, item]) => item && typeof item === "object" && !Array.isArray(item))) {
+            return entries.map(([key, item]) => {
+                if (["serverId", "server_id", "id"].some(idKey => typeof item[idKey] === "string" && item[idKey].length > 0))
+                    return item
+                return Object.assign({}, item, { serverId: key })
+            })
+        }
         return []
     }
 

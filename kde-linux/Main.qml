@@ -118,58 +118,56 @@ Kirigami.ApplicationWindow {
         loginMessage = "Sign-in cancelled."
     }
 
-    function records(value) {
+    function jsonList(value) {
+        // QJsonValue::toVariant exposes JSON arrays to QML as QVariantList.
+        // Qt sequences support array methods but fail Array.isArray().
         if (Array.isArray(value))
             return value
+        if (value && typeof value === "object"
+                && typeof value.length === "number" && typeof value.slice === "function")
+            return Array.from(value)
+        return null
+    }
+
+    function records(value) {
+        const list = root.jsonList(value)
+        if (list !== null)
+            return list
         if (!value || typeof value !== "object")
             return []
-        // Xbox endpoints have returned both array and object-shaped result
-        // envelopes. Prefer their known record containers before considering
-        // the envelope itself a single record.
-        for (const key of ["results", "result", "servers", "devices", "consoles", "items", "values"]) {
-            if (value[key] && typeof value[key] === "object") {
-                const nested = root.records(value[key])
-                if (nested.length > 0 || Array.isArray(value[key]))
-                    return nested
-            }
+        for (const key of ["result", "servers", "results", "devices", "consoles"]) {
+            const nested = root.jsonList(value[key])
+            if (nested !== null)
+                return nested
         }
-
-        if (["serverId", "server_id", "id"].some(key => typeof value[key] === "string" && value[key].length > 0))
-            return [value]
-
-        const entries = Object.entries(value)
-        if (entries.length > 0 && entries.length <= 50
-                && entries.every(([, item]) => item && typeof item === "object" && !Array.isArray(item))) {
-            return entries.map(([key, item]) => {
-                if (["serverId", "server_id", "id"].some(idKey => typeof item[idKey] === "string" && item[idKey].length > 0))
-                    return item
-                return Object.assign({}, item, { serverId: key })
-            })
-        }
+        if (value.result && typeof value.result === "object")
+            return root.records(value.result)
         return []
     }
 
     function responseSummary(value) {
-        if (Array.isArray(value))
-            return "response=array, count=" + value.length
+        const list = root.jsonList(value)
+        if (list !== null)
+            return "response=array, count=" + list.length
         if (!value || typeof value !== "object")
             return "response=" + typeof value
         const keys = Object.keys(value).slice(0, 8)
         const counts = []
         for (const key of ["results", "result", "servers", "devices", "consoles"]) {
-            if (Array.isArray(value[key]))
-                counts.push(key + "=" + value[key].length)
+            const entries = root.jsonList(value[key])
+            if (entries !== null)
+                counts.push(key + "=" + entries.length)
         }
-        if (value.results && typeof value.results === "object" && !Array.isArray(value.results)) {
+        if (value.results && typeof value.results === "object" && root.jsonList(value.results) === null) {
             counts.push("results=object")
             counts.push("resultsKeys=" + Object.keys(value.results).slice(0, 8).join(","))
         }
         if (typeof value.totalItems === "number")
             counts.push("totalItems=" + value.totalItems)
-        if (value.result && typeof value.result === "object" && !Array.isArray(value.result))
+        if (value.result && typeof value.result === "object" && root.jsonList(value.result) === null)
             counts.push("resultKeys=" + Object.keys(value.result).slice(0, 8).join(","))
-        const regions = value._xjausDiscovery && value._xjausDiscovery.regions
-        if (Array.isArray(regions)) {
+        const regions = root.jsonList(value._xjausDiscovery && value._xjausDiscovery.regions)
+        if (regions !== null) {
             const attempts = regions.slice(0, 6).map(entry => {
                 if (!entry || typeof entry !== "object")
                     return "unknown"
@@ -178,12 +176,11 @@ Kirigami.ApplicationWindow {
                     summary += "/HTTP " + entry.httpStatus
                 if (typeof entry.count === "number")
                     summary += "/" + entry.count
-                if (Array.isArray(entry.keys) && entry.keys.length)
-                    summary += "/keys=" + entry.keys.slice(0, 5).join(",")
+                const keys = root.jsonList(entry.keys)
+                if (keys && keys.length)
+                    summary += "/keys=" + keys.slice(0, 5).join(",")
                 if (entry.resultsType)
                     summary += "/results=" + String(entry.resultsType)
-                if (Array.isArray(entry.resultsKeys) && entry.resultsKeys.length)
-                    summary += "/resultKeys=" + entry.resultsKeys.slice(0, 5).join(",")
                 return summary
             })
             counts.push("regionChecks=" + attempts.join(" | "))
@@ -389,13 +386,16 @@ Kirigami.ApplicationWindow {
                     const item = items[index]
                     if (!item || typeof item !== "object")
                         continue
+                    const target = item.serverId || item.server_id || item.id
+                    if (typeof target !== "string" || !target.trim())
+                        continue
                     serverModel.append({
                         name: String(item.name || item.deviceName || "Streaming target " + String(index + 1)),
-                        serverId: String(item.serverId || item.id || "")
+                        serverId: target
                     })
                 }
-                root.serverMessage = items.length
-                    ? items.length + " Remote Play target(s) returned."
+                root.serverMessage = serverModel.count
+                    ? serverModel.count + " Remote Play target(s) returned."
                     : "No Remote Play targets were returned; " + root.responseSummary(result)
                 root.rebuildConsoleModel()
                 return

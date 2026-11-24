@@ -82,6 +82,8 @@ use std::{
     time::Duration,
 };
 
+const IPC_API_VERSION: u16 = 1;
+
 const COMMANDS: &[&str] = &[
     "auth_status",
     "begin_login_window",
@@ -1183,6 +1185,8 @@ async fn get_json(
 }
 #[derive(Deserialize)]
 struct Request {
+    #[serde(default)]
+    api_version: Option<u16>,
     id: u64,
     cmd: String,
     #[serde(default)]
@@ -1524,15 +1528,28 @@ impl RequestQueue {
     }
 }
 
+fn request_version_error(version: Option<u16>) -> Option<String> {
+    match version {
+        None | Some(IPC_API_VERSION) => None,
+        Some(_) => Some("Unsupported IPC API version".into()),
+    }
+}
+
 fn enqueue_request(
     queue: &RequestQueue,
     gate: &auth_gate::AuthGate,
     primary: &AuthSlot,
     cancellations: &connection_cancel::ConnectionCancellation,
     keepalive: &KeepaliveGate,
-    request: Request,
+    mut request: Request,
 ) -> Result<(), Box<Request>> {
+    if let Some(error) = request_version_error(request.api_version) {
+        request.pre_dispatch_error = Some(error);
+    }
     queue.push(request, |request| {
+        if request.pre_dispatch_error.is_some() {
+            return;
+        }
         let stamp = if request.cmd == "logout" {
             // The queue has reserved the priority slot. No dispatcher-owned
             // work or I/O may hold the auth commit or primary slot locks.
@@ -1690,7 +1707,7 @@ fn main() {
                 &reader_keepalive,
                 request,
             ) {
-                let response = json!({"id":request.id, "error":"IPC queue full"});
+                let response = json!({"api_version": IPC_API_VERSION, "id":request.id, "error":"IPC queue full"});
                 let mut stdout = io::stdout().lock();
                 if writeln!(stdout, "{response}").is_err() || stdout.flush().is_err() {
                     break false;
@@ -1828,8 +1845,8 @@ fn dispatch_requests(
 
 fn dispatch_response(request_id: u64, result: Result<Value, String>) -> Value {
     match result {
-        Ok(value) => json!({"id": request_id, "result": value}),
-        Err(error) => json!({"id": request_id, "error": error}),
+        Ok(value) => json!({"api_version": IPC_API_VERSION, "id": request_id, "result": value}),
+        Err(error) => json!({"api_version": IPC_API_VERSION, "id": request_id, "error": error}),
     }
 }
 
@@ -3902,6 +3919,28 @@ while True:
                 .await;
             assert_eq!(result.unwrap_err(), "Inicia sesión primero");
         });
+    }
+
+    #[test]
+    fn ipc_api_version_accepts_legacy_requests_and_v1() {
+        assert_eq!(request_version_error(None), None);
+        assert_eq!(request_version_error(Some(1)), None);
+    }
+
+    #[test]
+    fn ipc_api_version_rejects_unknown_versions_without_dispatch() {
+        assert_eq!(
+            request_version_error(Some(2)).as_deref(),
+            Some("Unsupported IPC API version")
+        );
+        assert_eq!(request_version_error(Some(0)).as_deref(), Some("Unsupported IPC API version"));
+    }
+
+    #[test]
+    fn ipc_responses_include_supported_api_version() {
+        let response = dispatch_response(7, Ok(json!({"authenticated": false})));
+        assert_eq!(response["api_version"], IPC_API_VERSION);
+        assert_eq!(response["id"], 7);
     }
 
     #[test]

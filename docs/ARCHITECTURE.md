@@ -9,7 +9,7 @@ XJAUS is an independent Xbox Cloud Gaming and Xbox Remote Play client. The curre
 | Electron sidecar | src-tauri/src/bin/xjaus_backend.rs | JSON requests over process stdio, authentication and session lifecycle. Linux builds from src-tauri/Cargo.toml; Windows builds the same entry point from backend-windows/Cargo.toml. |
 | Retained Tauri runner | src-tauri/src/lib.rs | Native command bridge sharing Rust service modules; not the Electron distribution. |
 | Packaging | package.json, scripts/packaging.cjs, scripts/build-windows.cjs | Current Electron renderer assets and platform sidecar are inputs; package verification and release authorization are separate. |
-| Linux KDE prototype | kde-linux/ | Experimental native sign-in/status slice using Kirigami and the existing sidecar. Not wired into release packaging. |
+| Linux KDE prototype | kde-linux/ | Experimental Kirigami frontend with sign-in, settings, and read-only console/catalog views. Not wired into release packaging. |
 
 ## Boundaries to preserve
 

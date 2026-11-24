@@ -165,6 +165,7 @@ qulonglong SidecarClient::invoke(const QString &command, const QVariantMap &args
     }
 
     QJsonObject request {
+        {QStringLiteral("api_version"), 1},
         {QStringLiteral("id"), static_cast<double>(id)},
         {QStringLiteral("cmd"), command},
         {QStringLiteral("args"), QJsonObject::fromVariantMap(args)}
@@ -238,6 +239,15 @@ void SidecarClient::readResponses()
             continue;
 
         const QJsonObject response = document.object();
+        const QJsonValue version = response.value(QStringLiteral("api_version"));
+        if (!version.isUndefined()
+            && (!version.isDouble() || version.toInt(-1) != 1)) {
+            const QJsonValue unsupportedId = response.value(QStringLiteral("id"));
+            if (unsupportedId.isDouble() && unsupportedId.toDouble() >= 1)
+                finish(static_cast<qulonglong>(unsupportedId.toDouble()), {},
+                       QStringLiteral("Unsupported backend API version"));
+            continue;
+        }
         const QJsonValue idValue = response.value(QStringLiteral("id"));
         if (!idValue.isDouble() || idValue.toDouble() < 1)
             continue;

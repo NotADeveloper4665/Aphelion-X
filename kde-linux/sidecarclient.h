@@ -4,6 +4,7 @@
 #include <QObject>
 #include <QProcess>
 #include <QTimer>
+#include <QVariant>
 #include <QVariantMap>
 
 class SidecarClient final : public QObject {
@@ -26,7 +27,7 @@ signals:
     void availableChanged();
     void statusMessageChanged();
     void requestFinished(qulonglong id, const QString &command,
-                         const QVariantMap &result, const QString &error);
+                         const QVariant &result, const QString &error);
 
 private:
     struct Pending {
@@ -37,7 +38,7 @@ private:
     QString resolveBackendPath() const;
     void setStatusMessage(const QString &message);
     void readResponses();
-    void finish(qulonglong id, const QVariantMap &result, const QString &error);
+    void finish(qulonglong id, const QVariant &result, const QString &error);
     void failAll(const QString &message);
 
     QProcess process_;

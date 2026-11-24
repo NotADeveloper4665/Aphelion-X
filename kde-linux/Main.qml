@@ -1,6 +1,8 @@
 import QtQuick
 import QtQuick.Controls as Controls
 import QtQuick.Layouts
+import QtWebChannel
+import QtWebEngine
 import org.kde.kirigami as Kirigami
 
 Kirigami.ApplicationWindow {
@@ -11,6 +13,7 @@ Kirigami.ApplicationWindow {
     minimumHeight: 520
     visible: true
     title: "XJAUS"
+    objectName: "xjaus-main-window"
 
     property bool authenticated: false
     property bool loginStarting: false
@@ -33,6 +36,9 @@ Kirigami.ApplicationWindow {
     property double backendStatusRequestId: 0
     property string backendHealthMessage: "Backend health has not been checked."
     property string currentSection: "home"
+    property bool playerPageReady: false
+    property var pendingNativeLaunch: null
+    property string nativeLaunchMessage: ""
     property string consoleMessage: "Consoles have not been loaded."
     property string serverMessage: "Streaming servers have not been loaded."
     property string cloudMessage: "Load the Cloud catalog when ready."
@@ -41,6 +47,61 @@ Kirigami.ApplicationWindow {
         resolution: "1920x1080", bitrate: 30000, codec: "auto",
         audio: "opus", audioGain: 1
     })
+
+    WebEngineScript {
+        id: webChannelLibrary
+        name: "xjaus-webchannel-library"
+        sourceUrl: "qrc:///qtwebchannel/qwebchannel.js"
+        injectionPoint: WebEngineScript.DocumentCreation
+        worldId: WebEngineScript.MainWorld
+    }
+
+    WebChannel {
+        id: nativeChannel
+    }
+
+    WebEngineScript {
+        id: webChannelBridge
+        name: "xjaus-native-bridge"
+        sourceUrl: "qrc:/xjaus/webchannel-bridge.js"
+        injectionPoint: WebEngineScript.DocumentCreation
+        worldId: WebEngineScript.MainWorld
+    }
+
+    function launchNativeStream(kind, target, name, artwork, consoleItem) {
+        if (!authenticated || !backend.available || !target) {
+            nativeLaunchMessage = "Sign in and select an available streaming target first."
+            return
+        }
+        pendingNativeLaunch = { kind, target, name, artwork, console: consoleItem }
+        nativeLaunchMessage = "Opening the player…"
+        currentSection = "player"
+        if (playerPageReady)
+            playerLaunchTimer.restart()
+    }
+
+    function dispatchNativeLaunch() {
+        if (!pendingNativeLaunch || !playerPageReady)
+            return
+        const payload = JSON.stringify(pendingNativeLaunch)
+        webPlayer.runJavaScript(
+            "window.dispatchEvent(new CustomEvent('xjaus:native-launch',{detail:" + payload + "}));"
+        )
+        pendingNativeLaunch = null
+        nativeLaunchMessage = "Connecting…"
+    }
+
+    function streamingTargetFor(consoleName) {
+        const key = String(consoleName || "").toLocaleLowerCase()
+        for (let i = 0; i < serverModel.count; ++i) {
+            const server = serverModel.get(i)
+            if (key && String(server.name || "").toLocaleLowerCase() === key)
+                return server.serverId
+        }
+        if (consoleModel.count === 1 && serverModel.count === 1)
+            return serverModel.get(0).serverId
+        return ""
+    }
 
     function startLogin() {
         if (!backend.available || loginStarting || polling)
@@ -142,6 +203,9 @@ Kirigami.ApplicationWindow {
     }
 
     Component.onCompleted: {
+        nativeChannel.registerObject("backend", backend)
+        if (backend.frontendUrl.toString().length > 0)
+            webPlayer.url = backend.frontendUrl
         if (backend.available) {
             statusRequestId = backend.invoke("auth_status")
             loadBackendStatus()
@@ -347,6 +411,23 @@ Kirigami.ApplicationWindow {
                     : "Sign-in did not complete. Start again or check the connection."
             }
         }
+
+        function onStreamStateChanged(active) {
+            if (active) {
+                root.nativeLaunchMessage = "Stream active."
+            } else if (root.currentSection === "player") {
+                root.pendingNativeLaunch = null
+                root.currentSection = "home"
+                root.nativeLaunchMessage = "Stream ended."
+            }
+        }
+    }
+
+    Timer {
+        id: playerLaunchTimer
+        interval: 250
+        repeat: false
+        onTriggered: root.dispatchNativeLaunch()
     }
 
     Timer {
@@ -369,7 +450,7 @@ Kirigami.ApplicationWindow {
     globalDrawer: Kirigami.GlobalDrawer {
         title: "XJAUS"
         isMenu: true
-        enabled: root.authenticated
+        enabled: root.authenticated && root.currentSection !== "player"
         actions: [
             Kirigami.Action {
                 text: "Home"
@@ -517,7 +598,8 @@ Kirigami.ApplicationWindow {
                 StackLayout {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    currentIndex: root.currentSection === "consoles" ? 1
+                    currentIndex: root.currentSection === "player" ? 4
+                        : root.currentSection === "consoles" ? 1
                         : root.currentSection === "cloud" ? 2
                         : root.currentSection === "settings" ? 3 : 0
 
@@ -532,7 +614,7 @@ Kirigami.ApplicationWindow {
                             }
                             Controls.Label {
                                 Layout.fillWidth: true
-                                text: "The Linux-native frontend is being migrated in small slices. Console presence, Cloud catalog browsing, and settings now use the existing Rust services. Stream playback is still on the current app."
+                                text: "Browse Xbox Cloud Gaming or connect to a home console. The Kirigami shell handles sign-in and settings; the embedded player reuses the established WebRTC session lifecycle."
                                 wrapMode: Text.Wrap
                             }
                             RowLayout {
@@ -590,7 +672,20 @@ Kirigami.ApplicationWindow {
                             delegate: Controls.ItemDelegate {
                                 width: ListView.view.width
                                 text: name + " · " + powerState
-                                enabled: false
+                                enabled: deviceId.length > 0
+                                    && root.streamingTargetFor(name).length > 0
+                                onClicked: {
+                                    const target = root.streamingTargetFor(name)
+                                    if (!target) {
+                                        root.serverMessage = "No matching Remote Play target was found. Refresh both lists and try again."
+                                        return
+                                    }
+                                    root.launchNativeStream("home", target, name, null, {
+                                        id: deviceId,
+                                        name,
+                                        powerState
+                                    })
+                                }
                             }
                         }
                         ListView {
@@ -607,7 +702,7 @@ Kirigami.ApplicationWindow {
                         Kirigami.InlineMessage {
                             Layout.fillWidth: true
                             type: Kirigami.MessageType.Information
-                            text: "Remote Play playback and wake controls are not migrated yet; the existing app remains the working path."
+                            text: "Remote Play launches through the shared Xbox session and WebRTC path inside the native KDE player."
                         }
                     }
 
@@ -642,13 +737,17 @@ Kirigami.ApplicationWindow {
                             delegate: Controls.ItemDelegate {
                                 width: ListView.view.width
                                 text: name
-                                enabled: false
+                                enabled: titleId.length > 0 && backend.available
+                                onClicked: root.launchNativeStream("cloud", titleId, name, {
+                                    titleId,
+                                    name
+                                }, null)
                             }
                         }
                         Kirigami.InlineMessage {
                             Layout.fillWidth: true
                             type: Kirigami.MessageType.Information
-                            text: "Game launch and the WebRTC player are not migrated yet; use the existing app for playback."
+                            text: "Cloud titles launch in the embedded player using the existing, shared WebRTC session implementation."
                         }
                     }
 
@@ -726,6 +825,38 @@ Kirigami.ApplicationWindow {
                             }
                         }
                     }
+
+                    Kirigami.Card {
+                        contentItem: ColumnLayout {
+                            spacing: Kirigami.Units.smallSpacing
+                            Controls.Label {
+                                Layout.fillWidth: true
+                                text: root.nativeLaunchMessage
+                                horizontalAlignment: Text.AlignHCenter
+                                visible: root.nativeLaunchMessage.length > 0
+                            }
+                            WebEngineView {
+                                id: webPlayer
+                                Layout.fillWidth: true
+                                Layout.fillHeight: true
+                                webChannel: nativeChannel
+                                userScripts: [webChannelLibrary, webChannelBridge]
+                                settings.playbackRequiresUserGesture: false
+                                settings.localContentCanAccessRemoteUrls: true
+                                url: ""
+                                onLoadingChanged: loadRequest => {
+                                    if (loadRequest.status === WebEngineView.LoadSucceededStatus) {
+                                        root.playerPageReady = true
+                                        if (root.pendingNativeLaunch)
+                                            playerLaunchTimer.restart()
+                                    } else if (loadRequest.status === WebEngineView.LoadFailedStatus) {
+                                        root.playerPageReady = false
+                                        root.nativeLaunchMessage = "The playback page could not be loaded. Check the installation and try again."
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
@@ -733,7 +864,7 @@ Kirigami.ApplicationWindow {
                 visible: !root.authenticated
                 Layout.fillWidth: true
                 type: Kirigami.MessageType.Information
-                text: "This is the first Linux-native UI slice. The existing app remains the full-featured fallback until playback and remaining interactions are migrated."
+                text: "The native KDE shell shares the Rust services and playback lifecycle with the existing client. Keep the Electron rollback until the Fedora RPM and real-session checks pass."
             }
 
             Controls.Label {

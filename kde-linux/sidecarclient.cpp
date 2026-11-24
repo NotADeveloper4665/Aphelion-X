@@ -4,10 +4,14 @@
 #include <QDesktopServices>
 #include <QDir>
 #include <QFileInfo>
+#include <QGuiApplication>
+#include <QClipboard>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonParseError>
+#include <QRegularExpression>
 #include <QUrl>
+#include <QWindow>
 
 
 namespace {
@@ -18,8 +22,10 @@ constexpr qsizetype kMaxPending = 64;
 
 bool commandAllowed(const QString &command)
 {
-    return command == QStringLiteral("backend_status")
+    return command == QStringLiteral("app_exit")
+        || command == QStringLiteral("backend_status")
         || command == QStringLiteral("auth_status")
+        || command == QStringLiteral("refresh_session")
         || command == QStringLiteral("load_settings")
         || command == QStringLiteral("save_settings")
         || command == QStringLiteral("list_consoles_smartglass")
@@ -27,6 +33,16 @@ bool commandAllowed(const QString &command)
         || command == QStringLiteral("list_cloud_titles")
         || command == QStringLiteral("catalog_products")
         || command == QStringLiteral("xbox_profile")
+        || command == QStringLiteral("wake_console")
+        || command == QStringLiteral("begin_connection")
+        || command == QStringLiteral("cancel_connection")
+        || command == QStringLiteral("start_stream")
+        || command == QStringLiteral("provision_stream")
+        || command == QStringLiteral("submit_stream_offer")
+        || command == QStringLiteral("poll_stream_answer")
+        || command == QStringLiteral("exchange_stream_ice")
+        || command == QStringLiteral("stream_keepalive")
+        || command == QStringLiteral("stop_stream")
         || command == QStringLiteral("begin_login_window")
         || command == QStringLiteral("poll_login")
         || command == QStringLiteral("cancel_login")
@@ -98,6 +114,24 @@ QString SidecarClient::statusMessage() const
     return statusMessage_;
 }
 
+QUrl SidecarClient::frontendUrl() const
+{
+    const QString configured = qEnvironmentVariable("XJAUS_FRONTEND");
+    const QStringList candidates = configured.isEmpty()
+        ? QStringList{
+              QDir(QCoreApplication::applicationDirPath()).filePath(
+                  QStringLiteral("../share/xjaus/web/index.html")),
+              QDir::current().filePath(QStringLiteral("dist/index.html"))
+          }
+        : QStringList{configured};
+    for (const QString &candidate : candidates) {
+        const QFileInfo info(candidate);
+        if (info.isFile())
+            return QUrl::fromLocalFile(info.absoluteFilePath());
+    }
+    return {};
+}
+
 void SidecarClient::setStatusMessage(const QString &message)
 {
     if (statusMessage_ == message)
@@ -157,6 +191,17 @@ qulonglong SidecarClient::invoke(const QString &command, const QVariantMap &args
 
     if (!commandAllowed(command)) {
         rejectLater(QStringLiteral("Command is not enabled in this prototype"));
+        return id;
+    }
+    if (command == QStringLiteral("app_exit")) {
+        if (!args.isEmpty()) {
+            rejectLater(QStringLiteral("Application exit arguments are not permitted"));
+            return id;
+        }
+        QTimer::singleShot(0, this, [this, id, command] {
+            emit requestFinished(id, command, {}, {});
+            QCoreApplication::quit();
+        });
         return id;
     }
     if (!available()) {
@@ -220,6 +265,87 @@ void SidecarClient::openVerificationUrl(const QString &value)
         return;
     }
     QDesktopServices::openUrl(url);
+}
+
+void SidecarClient::openExternalUrl(const QString &value)
+{
+    const QUrl url(value, QUrl::StrictMode);
+    const bool allowedPath = (url.host() == QStringLiteral("github.com")
+                              && url.path() == QStringLiteral("/perjesus111-hub/xjaus"))
+        || (url.host() == QStringLiteral("paypal.me")
+            && url.path() == QStringLiteral("/Comicoon"));
+    if (!url.isValid() || url.scheme() != QStringLiteral("https") || !allowedPath
+        || url.port(-1) != -1 || !url.userInfo().isEmpty()
+        || !url.query().isEmpty() || !url.fragment().isEmpty()) {
+        setStatusMessage(QStringLiteral("External address was rejected"));
+        return;
+    }
+    QDesktopServices::openUrl(url);
+}
+
+void SidecarClient::copyText(const QString &text)
+{
+    const bool userCode = QRegularExpression(QStringLiteral("^[A-Za-z0-9-]{1,64}$"))
+                              .match(text).hasMatch();
+    const bool verificationUrl = text.size() <= 512
+        && QUrl(text, QUrl::StrictMode).scheme() == QStringLiteral("https")
+        && (text == QStringLiteral("https://microsoft.com/devicelogin")
+            || text == QStringLiteral("https://www.microsoft.com/devicelogin")
+            || text == QStringLiteral("https://microsoft.com/link")
+            || text == QStringLiteral("https://www.microsoft.com/link"));
+    if (text.size() > 512 || (!userCode && !verificationUrl)) {
+        setStatusMessage(QStringLiteral("Clipboard value was rejected"));
+        return;
+    }
+    QGuiApplication::clipboard()->setText(text);
+}
+
+void SidecarClient::fullscreen(const QString &action)
+{
+    const QStringList allowed = {
+        QStringLiteral("enter"), QStringLiteral("exit"), QStringLiteral("toggle"),
+        QStringLiteral("restore"), QStringLiteral("session-enter"),
+        QStringLiteral("session-restore")
+    };
+    if (!allowed.contains(action))
+        return;
+    const auto windows = QGuiApplication::topLevelWindows();
+    if (windows.isEmpty())
+        return;
+    QWindow *window = windows.first();
+    for (QWindow *candidate : windows) {
+        if (candidate->objectName() == QStringLiteral("xjaus-main-window")) {
+            window = candidate;
+            break;
+        }
+    }
+    if (action == QStringLiteral("session-enter")) {
+        if (!sessionFullscreen_)
+            wasFullscreenBeforeSession_ = window->visibility() == QWindow::FullScreen;
+        sessionFullscreen_ = true;
+        window->showFullScreen();
+    } else if (action == QStringLiteral("session-restore")) {
+        if (sessionFullscreen_) {
+            sessionFullscreen_ = false;
+            if (wasFullscreenBeforeSession_)
+                window->showFullScreen();
+            else
+                window->showNormal();
+        }
+    } else if (action == QStringLiteral("enter")) {
+        window->showFullScreen();
+    } else if (action == QStringLiteral("exit") || action == QStringLiteral("restore")) {
+        window->showNormal();
+    } else if (window->visibility() == QWindow::FullScreen) {
+        window->showNormal();
+    } else {
+        window->showFullScreen();
+    }
+}
+
+void SidecarClient::reportStreamState(bool active)
+{
+    emit streamStateChanged(active);
 }
 
 void SidecarClient::readResponses()

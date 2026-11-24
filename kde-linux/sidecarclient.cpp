@@ -19,6 +19,13 @@ constexpr qsizetype kMaxPending = 64;
 bool commandAllowed(const QString &command)
 {
     return command == QStringLiteral("auth_status")
+        || command == QStringLiteral("load_settings")
+        || command == QStringLiteral("save_settings")
+        || command == QStringLiteral("list_consoles_smartglass")
+        || command == QStringLiteral("list_streaming_servers")
+        || command == QStringLiteral("list_cloud_titles")
+        || command == QStringLiteral("catalog_products")
+        || command == QStringLiteral("xbox_profile")
         || command == QStringLiteral("begin_login_window")
         || command == QStringLiteral("poll_login")
         || command == QStringLiteral("cancel_login")

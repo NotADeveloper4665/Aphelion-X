@@ -52,7 +52,7 @@ pub fn regions(token: &Value) -> Result<Vec<(String, String)>, String> {
             .get("name")
             .and_then(Value::as_str)
             .filter(|name| !name.is_empty())
-            .unwrap_or(host)
+            .unwrap_or(host.as_str())
             .chars()
             .filter(|ch| ch.is_ascii_alphanumeric() || *ch == '-' || *ch == '_')
             .take(32)

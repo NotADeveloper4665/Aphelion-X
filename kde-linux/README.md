@@ -1,8 +1,17 @@
-# XJAUS Linux KDE frontend prototype
+# XJAUS Linux KDE frontend
 
-This directory is an isolated native UI experiment. It uses Qt Quick and KDE Kirigami and talks to the existing Rust sidecar through its current newline-delimited JSON interface.
+This is a separate native Linux UI built with Qt Quick and KDE Kirigami. It starts the existing Rust sidecar directly and uses its bounded newline-delimited JSON protocol. The Rust backend remains shared with Electron; this project does not fork auth, streaming, or session state into a second implementation.
 
-The first slice covers only backend startup, sign-in status, Microsoft device-code sign-in, cancellation, and sign-out. The Cloud catalog, console discovery, settings, controller navigation, and WebRTC player are not ported here. Keep using the existing Linux application for those flows. This target is not wired into release packaging and does not change the default app.
+## Current migration slice
+
+Implemented in this target:
+
+- Rust backend startup, health/version/capability query, and sign-in status
+- Microsoft device-code sign-in, cancellation, and sign-out
+- Read-only console presence, Remote Play target, and Cloud catalog views
+- Load and save for streaming settings
+
+The console/catalog views do not start games yet, and the WebRTC player, wake flow, controller/keyboard input, recovery UI, and complete diagnostics are still in the existing app. This target is not wired into release packaging and does not change the Linux default. Windows continues using Electron.
 
 ## Build prerequisites
 
@@ -16,10 +25,16 @@ The first slice covers only backend startup, sign-in status, Microsoft device-co
     cmake -S kde-linux -B build/kde-linux -DCMAKE_BUILD_TYPE=Release
     cmake --build build/kde-linux
 
-Set XJAUS_BACKEND to the existing xjaus_backend executable before starting xjaus-kde. When packaged later, the app may resolve a bundled sidecar relative to its install path. Do not point this prototype at an untrusted executable.
+Set `XJAUS_BACKEND` to the existing `xjaus_backend` executable before starting `xjaus-kde`. When packaged later, the app may resolve a bundled sidecar relative to its install path. Do not point this frontend at an untrusted executable.
 
-The prototype keeps Microsoft device codes in the UI only long enough to display the sign-in step. Tokens remain in the Rust sidecar. It accepts only the Microsoft device-login HTTPS URLs already used by the app and has a deliberately small IPC command allowlist.
+Tokens remain in the Rust sidecar. The UI accepts only Microsoft device-login HTTPS URLs already used by the app. Requests carry IPC API version 1; unversioned clients remain accepted by the backend, while unknown versions are rejected before dispatch. The Rust process remains the single owner of authentication, session, cancellation, settings, and Xbox API state.
 
-## Migration gate
+## Progressive cutover
 
-Do not switch the Linux release entry point to this target until Cloud Gaming and Remote Play, sign-in and logout, settings, gamepad/keyboard navigation, diagnostics, suspend/recovery, and the WebRTC player have comparable behavior and evidence on supported Linux desktops. Until then, the existing UI remains the working fallback.
+1. Complete native console/cloud actions and the game launch flow while keeping the existing renderer as the proven playback implementation.
+2. Connect the native flow to playback with an explicit, bounded interface and preserve cancellation, cleanup, and recovery behavior.
+3. Validate sign-in/logout races, settings compatibility, Remote Play, Cloud Gaming, WebRTC playback, gamepad/keyboard, suspend/recovery, and diagnostics on supported Linux desktops.
+4. Add native Linux packaging as an opt-in candidate with an easy Electron rollback.
+5. Change the Linux desktop entry point only after those checks pass. Windows remains Electron.
+
+Keep each stage independently buildable and keep the Electron Linux package available until the candidate passes real-session validation.

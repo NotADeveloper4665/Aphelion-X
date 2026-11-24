@@ -2,7 +2,7 @@
 
 [Español](README.es.md)
 
-XJAUS is an independent desktop client for Xbox Cloud Gaming and Xbox Remote Play. Its controller-oriented interface runs in Electron, with a Rust sidecar for authentication and stream control. Cloud availability depends on Microsoft service eligibility, region and account; Remote Play requires a compatible console configured for remote features.
+XJAUS is an independent desktop client for Xbox Cloud Gaming and Xbox Remote Play. The Linux development build now defaults to a native KDE Kirigami shell backed by the shared Rust services and existing WebRTC player. Windows continues to use Electron; the previous Electron Linux packages remain available as rollback. Cloud availability depends on Microsoft service eligibility, region and account; Remote Play requires a compatible console configured for remote features.
 
 ## Navigation
 
@@ -68,8 +68,9 @@ XJAUS is an independent desktop client for Xbox Cloud Gaming and Xbox Remote Pla
 - CI workflow (source): [.github/workflows/validation.yml](.github/workflows/validation.yml) — Node 24, separate Cargo manifests for Linux (`src-tauri`) and Windows (`backend-windows`).
 - Source checks: [CONTRIBUTING.md](CONTRIBUTING.md)
 - Architecture boundaries: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
-- Experimental native Linux UI: [KDE/Kirigami prototype](kde-linux/README.md) (sign-in slice only; not used by release packages)
-- Linux packaging (local): `npm run dist:linux` (Docker, not part of CI source validation)
+- Native Linux UI: [KDE/Kirigami frontend](kde-linux/README.md) (Fedora RPM candidate with the existing player and Rust sidecar; real Xbox session validation remains required before replacing published packages)
+- Linux native package (Fedora): `npm run dist:linux` or `npm run dist:linux:kde`
+- Electron Linux rollback package: `npm run dist:linux:electron` (Docker)
 - Windows build instructions: [WINDOWS-BUILD.md](WINDOWS-BUILD.md)
 - Rollback procedure: [docs/ROLLBACK.md](docs/ROLLBACK.md)
 

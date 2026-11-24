@@ -132,6 +132,25 @@ Kirigami.ApplicationWindow {
         return []
     }
 
+    function responseSummary(value) {
+        if (Array.isArray(value))
+            return "response=array, count=" + value.length
+        if (!value || typeof value !== "object")
+            return "response=" + typeof value
+        const keys = Object.keys(value).slice(0, 8)
+        const counts = []
+        for (const key of ["results", "result", "servers", "devices", "consoles"]) {
+            if (Array.isArray(value[key]))
+                counts.push(key + "=" + value[key].length)
+        }
+        if (typeof value.totalItems === "number")
+            counts.push("totalItems=" + value.totalItems)
+        if (value.result && typeof value.result === "object" && !Array.isArray(value.result))
+            counts.push("resultKeys=" + Object.keys(value.result).slice(0, 8).join(","))
+        return "responseKeys=" + (keys.length ? keys.join(",") : "none")
+            + (counts.length ? "; " + counts.join("; ") : "")
+    }
+
     function rebuildConsoleModel() {
         const smart = smartConsoleRecords.filter(item => item && typeof item === "object")
         consoleModel.clear()
@@ -318,7 +337,7 @@ Kirigami.ApplicationWindow {
 
             if (command === "list_streaming_servers" && id === root.serversRequestId) {
                 if (error.length > 0) {
-                    root.serverMessage = "Could not load Remote Play targets."
+                    root.serverMessage = "Remote Play lookup failed: " + String(error).slice(0, 160)
                     serverModel.clear()
                     root.rebuildConsoleModel()
                     return
@@ -336,7 +355,7 @@ Kirigami.ApplicationWindow {
                 }
                 root.serverMessage = items.length
                     ? items.length + " Remote Play target(s) returned."
-                    : "No Remote Play targets were returned."
+                    : "No Remote Play targets were returned; " + root.responseSummary(result)
                 root.rebuildConsoleModel()
                 return
             }

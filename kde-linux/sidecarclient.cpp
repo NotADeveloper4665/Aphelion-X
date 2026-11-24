@@ -259,17 +259,15 @@ void SidecarClient::readResponses()
         if (!idValue.isDouble() || idValue.toDouble() < 1)
             continue;
         const qulonglong id = static_cast<qulonglong>(idValue.toDouble());
-        if (response.value(QStringLiteral("result")).isObject()) {
-            finish(id, response.value(QStringLiteral("result")).toObject().toVariantMap(), {});
-        } else if (response.value(QStringLiteral("error")).isString()) {
+        if (response.value(QStringLiteral("error")).isString()) {
             finish(id, {}, response.value(QStringLiteral("error")).toString());
-        } else if (response.value(QStringLiteral("result")).isNull()) {
-            finish(id, {}, {});
+        } else if (!response.value(QStringLiteral("result")).isUndefined()) {
+            finish(id, response.value(QStringLiteral("result")).toVariant(), {});
         }
     }
 }
 
-void SidecarClient::finish(qulonglong id, const QVariantMap &result, const QString &error)
+void SidecarClient::finish(qulonglong id, const QVariant &result, const QString &error)
 {
     auto it = pending_.find(id);
     if (it == pending_.end())

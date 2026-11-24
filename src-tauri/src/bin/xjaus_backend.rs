@@ -85,6 +85,7 @@ use std::{
 const IPC_API_VERSION: u16 = 1;
 
 const COMMANDS: &[&str] = &[
+    "backend_status",
     "auth_status",
     "begin_login_window",
     "poll_login",
@@ -591,6 +592,21 @@ impl Backend {
             None => self.auth_gate.capture()?,
         };
         match cmd {
+            "backend_status" => Ok(json!({
+                "service": "xjaus-backend",
+                "ready": true,
+                "version": env!("CARGO_PKG_VERSION"),
+                "platform": std::env::consts::OS,
+                "apiVersion": IPC_API_VERSION,
+                "capabilities": [
+                    "authentication",
+                    "settings",
+                    "console-presence",
+                    "remote-play",
+                    "cloud-streaming",
+                    "connection-cancellation"
+                ]
+            })),
             "load_settings" => serde_json::to_value(settings::load_at(&settings::root()?)?)
                 .map_err(|_| "Ajustes no disponibles".into()),
             "save_settings" => {

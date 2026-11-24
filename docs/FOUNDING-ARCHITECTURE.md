@@ -159,7 +159,7 @@ For each extraction:
 
 The Linux UI is an explicit platform migration target. Start as a separate Kirigami application and reuse the existing Rust sidecar contract. Keep Electron as the shipping Linux fallback while the new frontend is incomplete. Do not combine this work with a WebRTC, authentication, IPC, or packaging rewrite.
 
-The first native slice is an isolated sign-in/status frontend in kde-linux/. Expand it one user flow at a time: settings and profile, console discovery, Cloud catalog, then the player and its controller/input behavior. Each screen must use the existing backend command path or a documented adapter; never fork service logic into a second Rust implementation.
+The native prototype in kde-linux/ now covers sign-in/status, settings, and read-only console and Cloud catalog views through existing backend commands. Next migrate profile details and the complete console/cloud launch flows, then the player and its controller/input behavior. Each screen must use the existing backend command path or a documented adapter; never fork service logic into a second Rust implementation.
 
 Do not change Linux release defaults until the native app covers sign-in/logout, settings, console and Cloud flows, WebRTC playback, gamepad and keyboard navigation, diagnostics, and recovery, and passes the same relevant Linux compatibility checks as the existing app. Rehearse fallback to the Electron package without migrating or restoring credentials. The native preview is opt-in and does not imply that packaging is wired up or that it is validated.
 

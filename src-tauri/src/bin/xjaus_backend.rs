@@ -916,11 +916,22 @@ impl Backend {
                         (host, bearer, path)
                     };
                     let url = format!("https://{host}{path}");
+                    // Greenlight's xHome client identifies itself and sends
+                    // device metadata on this endpoint. Without those headers
+                    // Xbox can answer successfully with an empty console list.
+                    let device_info = session::DeviceProfile::default()
+                        .device_info_header()
+                        .to_string();
+                    let home_headers = [
+                        ("Accept", "application/json"),
+                        ("Content-Type", "application/json"),
+                        ("X-Gssv-Client", "XboxComBrowser"),
+                        ("X-MS-Device-Info", device_info.as_str()),
+                        ("Cache-Control", "no-store, no-cache, must-revalidate"),
+                        ("Pragma", "no-cache"),
+                    ];
                     let headers: &[(&str, &str)] = if kind == SessionKind::Home {
-                        &[
-                            ("Cache-Control", "no-store, no-cache, must-revalidate"),
-                            ("Pragma", "no-cache"),
-                        ]
+                        &home_headers
                     } else {
                         &[]
                     };

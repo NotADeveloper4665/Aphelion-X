@@ -820,15 +820,26 @@ async fn list_streaming_servers(state: State<'_, AppState>) -> Result<Value, Str
     let bundle = snapshot_tokens(&state)?;
     let host = region_host(&bundle.home_stream_token)?;
     let bearer = token_text(&bundle.home_stream_token, "gsToken")?;
+    // Match the client headers used by Xbox's browser streaming API clients.
+    // In particular, /v6/servers/home can return an empty list when these are
+    // omitted even though the same account can see its console in Greenlight.
+    let device_info = session::DeviceProfile::default()
+        .device_info_header()
+        .to_string();
+    let headers = [
+        ("Accept", "application/json"),
+        ("Content-Type", "application/json"),
+        ("X-Gssv-Client", "XboxComBrowser"),
+        ("X-MS-Device-Info", device_info.as_str()),
+        ("Cache-Control", "no-store, no-cache, must-revalidate"),
+        ("Pragma", "no-cache"),
+    ];
     get_json(
         &state.client,
         format!("https://{host}/v6/servers/home"),
         Some(&bearer),
         None,
-        &[
-            ("Cache-Control", "no-store, no-cache, must-revalidate"),
-            ("Pragma", "no-cache"),
-        ],
+        &headers,
     )
     .await
 }

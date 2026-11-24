@@ -1,10 +1,12 @@
-# XJAUS
+# XJAUS-KDE
 
 [Español](README.es.md)
 
 **Xbox Cloud Gaming and Xbox Remote Play on desktop Linux and Windows.**
 
 XJAUS is an independent, controller-focused streaming client. It connects to Xbox Cloud Gaming and compatible Xbox consoles, with a Rust service handling authentication, Xbox API requests, settings, and stream-session ownership.
+
+XJAUS-KDE draws on Aphelion’s streaming architecture for its Qt/KDE frontend and Rust service health reporting.
 
 > **Linux update:** This branch adds a native KDE Kirigami frontend and Fedora RPM build path. The RPM is still a candidate: it needs a successful native build and real Xbox session validation. Published Linux packages remain available as the current release and rollback. Windows continues to use Electron.
 

@@ -756,7 +756,7 @@ async function startGame(kind: "home" | "cloud", target: string, name: string, a
       attempt.generation,
     );
     session = candidate;
-    await candidate.negotiate(kind, target, selectedProfile());
+    await candidate.negotiate(kind, target, selectedProfile(), console?.regionHost);
     check();
     if (kind === "cloud") bindText(message,()=>t('waitingVideo'));
   } catch (error) {

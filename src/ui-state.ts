@@ -4,7 +4,7 @@ export function bindVideoReadyOverlay(video: EventTarget, overlay: { hidden: boo
   }
 }
 
-export type ConsoleItem = { id?: string; name?: string; deviceName?: string; serverId?: string; powerState?: string; consoleType?: string };
+export type ConsoleItem = { id?: string; name?: string; deviceName?: string; serverId?: string; regionHost?: string; powerState?: string; consoleType?: string };
 type RecordObject = Record<string, unknown>;
 function record(value: unknown): RecordObject | undefined { return value !== null && typeof value === "object" && !Array.isArray(value) ? value as RecordObject : undefined; }
 export function extractConsoles(raw: unknown): ConsoleItem[] {

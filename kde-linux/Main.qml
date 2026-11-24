@@ -88,6 +88,18 @@ Kirigami.ApplicationWindow {
         return ""
     }
 
+    function serverRegionFor(consoleName) {
+        const key = String(consoleName || "").toLocaleLowerCase()
+        for (let i = 0; i < serverModel.count; ++i) {
+            const server = serverModel.get(i)
+            if (key && String(server.name || "").toLocaleLowerCase() === key)
+                return server.regionHost || ""
+        }
+        if (consoleModel.count === 1 && serverModel.count === 1)
+            return serverModel.get(0).regionHost || ""
+        return ""
+    }
+
     function startLogin() {
         if (!backend.available || loginStarting || polling)
             return
@@ -197,7 +209,8 @@ Kirigami.ApplicationWindow {
                 consoleModel.append({
                     name: String(item.name || item.deviceName || "Xbox console"),
                     powerState: String(item.powerState || "Unknown"),
-                    deviceId: String(item.id || "")
+                    deviceId: String(item.id || ""),
+                    regionHost: String(root.serverRegionFor(item.name || item.deviceName) || "")
                 })
             }
             consoleMessage = smart.length + " console record(s) returned."
@@ -391,7 +404,8 @@ Kirigami.ApplicationWindow {
                         continue
                     serverModel.append({
                         name: String(item.name || item.deviceName || "Streaming target " + String(index + 1)),
-                        serverId: target
+                        serverId: target,
+                        regionHost: String(item._xjausRegionHost || "")
                     })
                 }
                 root.serverMessage = serverModel.count
@@ -785,7 +799,8 @@ Kirigami.ApplicationWindow {
                                 onClicked: root.launchNativeStream("home", target, name, null, {
                                     id: deviceId,
                                     name,
-                                    powerState
+                                    powerState,
+                                    regionHost: root.serverRegionFor(name)
                                 })
                             }
                         }

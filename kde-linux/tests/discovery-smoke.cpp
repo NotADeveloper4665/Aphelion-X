@@ -37,6 +37,8 @@ int main(int argc, char **argv)
                     == QStringLiteral("streaming-fixture-id")
                 && evaluate(QStringLiteral("pendingNativeLaunch.console.id")).toString()
                     == QStringLiteral("presence-fixture-id")
+                && evaluate(QStringLiteral("pendingNativeLaunch.console.regionHost")).toString()
+                    == QStringLiteral("wus2.core.gssv-play-prodxhome.xboxlive.com")
                 && evaluate(QStringLiteral("webPlayer.height > 0")).toBool()) {
                 app.exit(0);
             }

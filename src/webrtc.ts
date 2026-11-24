@@ -435,7 +435,7 @@ export class XboxSessionCoordinator {
     void this.absorbLateFailures(ping());
   }
 
-  async negotiate(kind: "home" | "cloud", target: string, profile?: Record<string, unknown>): Promise<void> {
+  async negotiate(kind: "home" | "cloud", target: string, profile?: Record<string, unknown>, regionHost?: string): Promise<void> {
     const request = async <T>(command: string, args?: Record<string, unknown>): Promise<T> => {
       this.checkActive();
       const result = await invoke<T>(command, { ...args, attemptId: this.attemptId, generation: this.generation });
@@ -450,6 +450,7 @@ export class XboxSessionCoordinator {
       kind,
       target,
       profile: profile ?? null,
+      ...(kind === "home" && regionHost ? { regionHost } : {}),
       ...(streamingLocale ? { streamingLocale } : {}),
     });
     if (this.onProgress) {

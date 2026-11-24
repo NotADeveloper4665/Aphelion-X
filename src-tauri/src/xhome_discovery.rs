@@ -178,7 +178,18 @@ pub async fn list_servers(client: &Client, token: &Value) -> Result<Value, Strin
         };
         had_success = true;
         match normalized_server_response(&value) {
-            Some(normalized) if !normalized["results"].as_array().is_some_and(Vec::is_empty) => {
+            Some(mut normalized) if !normalized["results"].as_array().is_some_and(Vec::is_empty) => {
+                let region_host = Url::parse(&url).ok().and_then(|region| region.host_str().map(str::to_owned))
+                    .ok_or("Invalid Xbox region host")?;
+                let object = normalized.as_object_mut().ok_or("Invalid Xbox server response")?;
+                object.insert("_xjausRegionHost".into(), Value::String(region_host.clone()));
+                if let Some(records) = object.get_mut("results").and_then(Value::as_array_mut) {
+                    for record in records {
+                        if let Some(record) = record.as_object_mut() {
+                            record.insert("_xjausRegionHost".into(), Value::String(region_host.clone()));
+                        }
+                    }
+                }
                 return Ok(normalized)
             }
             Some(normalized) => outcomes.push(json!({

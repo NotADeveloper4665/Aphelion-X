@@ -976,7 +976,13 @@ impl Backend {
                 let (host, bearer) = {
                     let bundle = self.tokens()?;
                     let token = Self::streaming_token(&bundle, kind)?;
-                    (region_host(token)?, text_field(token, "gsToken")?)
+                    let requested_region = start.get("regionHost").and_then(Value::as_str);
+                    let host = if kind == SessionKind::Home {
+                        region_host_for(token, requested_region)?
+                    } else {
+                        region_host(token)?
+                    };
+                    (host, text_field(token, "gsToken")?)
                 };
                 let mut stream =
                     SessionClient::new(self.client.clone(), host, bearer, kind, profile);
@@ -1203,6 +1209,24 @@ fn text_field(value: &Value, key: &str) -> Result<String, String> {
         .map(str::to_owned)
         .ok_or_else(|| format!("Falta {key} en la respuesta Xbox"))
 }
+fn region_host_for(token: &Value, requested: Option<&str>) -> Result<String, String> {
+    let Some(requested) = requested.filter(|host| !host.is_empty()) else {
+        return region_host(token);
+    };
+    let regions = token.pointer("/offeringSettings/regions").and_then(Value::as_array)
+        .ok_or("The Xbox token has no regions")?;
+    for region in regions {
+        let Some(base_uri) = region.get("baseUri").and_then(Value::as_str) else { continue; };
+        let Ok(url) = Url::parse(base_uri) else { continue; };
+        let Some(host) = url.host_str() else { continue; };
+        if url.scheme() == "https" && host == requested
+            && (host == "xboxlive.com" || host.ends_with(".xboxlive.com")) {
+            return Ok(host.to_owned());
+        }
+    }
+    Err("The selected Remote Play region is not authorized by the Xbox token".into())
+}
+
 fn region_host(token: &Value) -> Result<String, String> {
     let regions = token
         .pointer("/offeringSettings/regions")
@@ -1925,6 +1949,23 @@ fn dispatch_response(request_id: u64, result: Result<Value, String>) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn remote_play_region_must_match_the_xbox_token() {
+        let token = json!({"offeringSettings":{"regions":[
+            {"isDefault":true,"baseUri":"https://default.core.gssv-play.xboxlive.com"},
+            {"name":"WestUS2","baseUri":"https://wus2.core.gssv-play-prodxhome.xboxlive.com"}
+        ]}});
+        assert_eq!(
+            region_host_for(&token, Some("wus2.core.gssv-play-prodxhome.xboxlive.com")).unwrap(),
+            "wus2.core.gssv-play-prodxhome.xboxlive.com"
+        );
+        assert!(region_host_for(&token, Some("attacker.example")).is_err());
+        assert_eq!(
+            region_host_for(&token, None).unwrap(),
+            "default.core.gssv-play.xboxlive.com"
+        );
+    }
+
     #[test]
     fn queued_begin_pins_admission_without_claiming_it() {
         use std::time::{Duration, Instant};

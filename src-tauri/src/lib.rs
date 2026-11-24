@@ -497,7 +497,7 @@ async fn load_session(state: State<'_, AppState>) -> Result<Status, String> {
         return Ok(auth_status_after(&state));
     }
     let Some(saved) = vault::load()? else {
-        return auth_status(&state);
+        return auth_status(state);
     };
     let epoch = state.auth_gate.capture()?;
     let vault_generation = vault::generation()?;

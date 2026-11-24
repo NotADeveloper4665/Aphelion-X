@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 
 find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 WebChannel WebEngineQuick)
-find_package(KF6 REQUIRED COMPONENTS Kirigami)
+find_package(KF6Kirigami REQUIRED)
 
 set(XJAUS_BACKEND_PATH "" CACHE FILEPATH "Prebuilt xjaus_backend executable to include in a Linux package")
 set(XJAUS_WEB_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../dist" CACHE PATH "Built XJAUS web renderer used for WebRTC playback")

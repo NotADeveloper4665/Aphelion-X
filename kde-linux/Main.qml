@@ -41,6 +41,7 @@ Kirigami.ApplicationWindow {
     property string nativeLaunchMessage: ""
     property string consoleMessage: "Consoles have not been loaded."
     property string serverMessage: "Streaming servers have not been loaded."
+    property var smartConsoleRecords: []
     property string cloudMessage: "Load the Cloud catalog when ready."
     property string settingsMessage: "Settings have not been loaded."
     property var settings: ({
@@ -126,7 +127,39 @@ Kirigami.ApplicationWindow {
             if (Array.isArray(value[key]))
                 return value[key]
         }
+        if (value.result && typeof value.result === "object")
+            return root.records(value.result)
         return []
+    }
+
+    function rebuildConsoleModel() {
+        const smart = smartConsoleRecords.filter(item => item && typeof item === "object")
+        consoleModel.clear()
+        if (smart.length > 0) {
+            for (const item of smart) {
+                consoleModel.append({
+                    name: String(item.name || item.deviceName || "Xbox console"),
+                    powerState: String(item.powerState || "Unknown"),
+                    deviceId: String(item.id || "")
+                })
+            }
+            consoleMessage = smart.length + " console record(s) returned."
+            return
+        }
+
+        for (let index = 0; index < serverModel.count; ++index) {
+            const server = serverModel.get(index)
+            if (!server.serverId)
+                continue
+            consoleModel.append({
+                name: server.name,
+                powerState: "Unknown",
+                deviceId: ""
+            })
+        }
+        consoleMessage = consoleModel.count > 0
+            ? "SmartGlass returned no consoles; showing Remote Play targets."
+            : "No console or Remote Play records were returned."
     }
 
     function showSection(section) {
@@ -274,41 +307,33 @@ Kirigami.ApplicationWindow {
                     root.consoleMessage = "Could not load console presence."
                     return
                 }
-                const items = root.records(result)
-                consoleModel.clear()
-                for (const item of items) {
-                    if (!item || typeof item !== "object")
-                        continue
-                    consoleModel.append({
-                        name: String(item.name || item.deviceName || "Xbox console"),
-                        powerState: String(item.powerState || "Unknown"),
-                        deviceId: String(item.id || "")
-                    })
-                }
-                root.consoleMessage = items.length
-                    ? items.length + " console record(s) returned."
-                    : "No console records were returned."
+                root.smartConsoleRecords = root.records(result)
+                root.rebuildConsoleModel()
                 return
             }
 
             if (command === "list_streaming_servers" && id === root.serversRequestId) {
                 if (error.length > 0) {
                     root.serverMessage = "Could not load Remote Play targets."
+                    serverModel.clear()
+                    root.rebuildConsoleModel()
                     return
                 }
                 const items = root.records(result)
                 serverModel.clear()
-                for (const item of items) {
+                for (let index = 0; index < items.length; ++index) {
+                    const item = items[index]
                     if (!item || typeof item !== "object")
                         continue
                     serverModel.append({
-                        name: String(item.name || item.deviceName || "Streaming target"),
+                        name: String(item.name || item.deviceName || "Streaming target " + String(index + 1)),
                         serverId: String(item.serverId || item.id || "")
                     })
                 }
                 root.serverMessage = items.length
                     ? items.length + " Remote Play target(s) returned."
                     : "No Remote Play targets were returned."
+                root.rebuildConsoleModel()
                 return
             }
 
@@ -679,8 +704,7 @@ Kirigami.ApplicationWindow {
                             delegate: Controls.ItemDelegate {
                                 width: ListView.view.width
                                 text: name + " · " + powerState
-                                enabled: deviceId.length > 0
-                                    && root.streamingTargetFor(name).length > 0
+                                enabled: root.streamingTargetFor(name).length > 0
                                 onClicked: {
                                     const target = root.streamingTargetFor(name)
                                     if (!target) {

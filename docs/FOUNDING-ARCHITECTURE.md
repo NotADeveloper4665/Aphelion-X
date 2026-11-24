@@ -43,6 +43,16 @@ The current architecture documented and observed in the repository is:
 
 The renderer currently contains the WebRTC media path. XJAUS is a client of Xbox services; it does not own the host capture/encode/network pipeline described in Aphelion. Do not transplant host-side encoder workers, Moonlight pairing, FEC, or host capture abstractions into this project.
 
+### 3.1 Rust service ownership and Aphelion transfer
+
+A source review of the current Rust sidecar shows that its service code is already divided into focused modules, including auth and auth gating, catalog, console presence, connection cancellation, session operations, session journals, settings, credential storage, and console wake. The sidecar runner composes those services and owns the active auth/session state. Electron main currently supervises the sidecar; the renderer owns WebRTC peer and media state. The retained Tauri runner calls the shared service code through a separate command bridge.
+
+This is already close to the ownership discipline sought in Aphelion. XJAUS does not need a new Rust supervisor or per-service processes. The transferable work is to keep the existing frontend boundary stable, expose only measured health, and make request/session identity and failure ownership explicit. Preserve the Cloud and Home session kinds and their existing behavior.
+
+The sidecar stdin/stdout envelope currently correlates requests and replies by ID and command, but has no explicit API version. Version it additively: accept requests with no version as legacy v1, accept explicit v1, reject unknown versions without dispatching them, and include the supported version in responses. Existing Electron consumers ignore unknown response fields, so this can roll out without changing command behavior. The retained Tauri bridge is a separate runner and should continue sharing services rather than adopting the sidecar wire format artificially.
+
+Do not add a health field for renderer-owned WebRTC state to Rust. Keep the responsibility split clear: Rust can report its own lifecycle and Xbox request outcomes; the frontend reports peer connection and playback measurements. Unknown and unavailable values remain explicit.
+
 ### 3.1 Connection identity and lifecycle
 
 Every connection attempt must remain distinguishable from the active stream. Preserve the existing attemptId and generation guards while reviewing all commands that mutate a connection. Late replies from an older attempt must not replace or stop the newer attempt.

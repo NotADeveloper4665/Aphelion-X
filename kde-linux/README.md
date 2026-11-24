@@ -40,7 +40,9 @@ The build needs Node/npm, the Qt 6/Kirigami/WebEngine development packages, CMak
 
 This produces a Fedora RPM in `release/linux-kde/` and installs an XJAUS desktop entry, icon, Kirigami executable, web player assets, and Rust sidecar. The proposed GitHub Actions job uploads the RPM for seven days once that workflow is present on the repository's default branch. Existing published Linux release artifacts remain unchanged until the playback gate below is met.
 
-Tokens remain in the Rust sidecar. The UI accepts only Microsoft device-login HTTPS URLs already used by the app. Requests carry IPC API version 1; unversioned clients remain accepted by the backend, while unknown versions are rejected before dispatch. The Rust process remains the single owner of authentication, session, cancellation, settings, and Xbox API state.
+Tokens remain in the Rust sidecar. On Linux, a successful device-code sign-in stores the token bundle in the user's Secret Service keyring; the app never stores the Microsoft password. On startup, the backend reads the saved bundle from the keyring, refreshes it with Microsoft, and then reports the session as signed in. If Secret Service is unavailable or locked, sign-in cannot be saved and the app reports the storage error. Signing out invalidates the local restore marker before removing the keyring item, so a failed delete cannot silently restore an old session next time.
+
+The UI accepts only Microsoft device-login HTTPS URLs already used by the app. Requests carry IPC API version 1; unversioned clients remain accepted by the backend, while unknown versions are rejected before dispatch. The Rust process remains the single owner of authentication, session, cancellation, settings, and Xbox API state.
 
 ## Progressive cutover
 

@@ -21,7 +21,7 @@ mod auth_gate;
 mod catalog;
 mod console_presence;
 mod instance_guard;
-#[cfg(all(test, not(windows)))]
+#[cfg(any(target_os = "linux", all(test, not(windows))))]
 mod logout_barrier;
 #[cfg_attr(windows, path = "profile_windows.rs")]
 mod profile;
@@ -131,7 +131,7 @@ fn auth_status_after(state: &State<'_, AppState>) -> Status {
             .and_then(|tokens| tokens.as_ref())
             .and_then(|t| account_scope::catalog_account_scope(&t.web_token)),
         account: "Xbox account".into(),
-        storage: "memory (session only)".into(),
+        storage: if cfg!(target_os = "linux") { "system keyring" } else { "memory only" }.into(),
     }
 }
 fn token_text(value: &Value, key: &str) -> Result<String, String> {
@@ -400,10 +400,11 @@ async fn poll_login(attempt_id: String, state: State<'_, AppState>) -> Result<St
                         Ok(saved)
                     })?;
                     let storage = match saved {
-                        Ok(()) => "memory",
+                        Ok(()) if cfg!(target_os = "linux") => "system keyring",
+                        Ok(()) => "memory only",
                         Err(error) if error.contains("fallback passphrase required") => "passphrase-required",
                         Err(_) => return Err(
-                            "Authentication succeeded, but secure storage failed; tokens remain only in memory".into(),
+                            "Authentication succeeded, but the system keyring could not save the session. Unlock or enable the keyring, then sign in again.".into(),
                         ),
                     };
                     Ok(Status {
@@ -467,13 +468,11 @@ async fn complete_login(
 }
 
 #[tauri::command]
-fn persist_session(_state: State<'_, AppState>) -> Result<Status, String> {
-    Err("Session persistence is disabled; sessions are memory only".into())
-}
-
-#[tauri::command]
-fn load_session(_state: State<'_, AppState>) -> Result<Status, String> {
-    Err("Session restoration is disabled; sign in again".into())
+fn persist_session(state: State<'_, AppState>) -> Result<Status, String> {
+    let tokens = state.tokens.lock().map_err(|_| state_error())?.clone()
+        .ok_or("Sign in before saving a session")?;
+    vault::save(&tokens)?;
+    Ok(auth_status_after(&state))
 }
 
 #[tauri::command]
@@ -488,8 +487,29 @@ fn auth_status(state: State<'_, AppState>) -> Result<Status, String> {
             .as_ref()
             .and_then(|t| account_scope::catalog_account_scope(&t.web_token)),
         account: if authenticated { "Xbox account" } else { "" }.into(),
-        storage: "memory (session only)".into(),
+        storage: if authenticated && cfg!(target_os = "linux") { "system keyring" } else if authenticated { "memory only" } else { "not signed in" }.into(),
     })
+}
+
+#[tauri::command]
+async fn load_session(state: State<'_, AppState>) -> Result<Status, String> {
+    if state.tokens.lock().map_err(|_| state_error())?.is_some() {
+        return Ok(auth_status_after(&state));
+    }
+    let Some(saved) = vault::load()? else {
+        return auth_status(&state);
+    };
+    let epoch = state.auth_gate.capture()?;
+    let vault_generation = vault::generation()?;
+    let refreshed = auth::refresh_bundle(&state.client, &saved)
+        .await
+        .map_err(|error| error.to_string())?;
+    state.auth_gate.commit(epoch, || {
+        vault::save_if_generation(&refreshed, &saved, vault_generation)?;
+        *state.tokens.lock().map_err(|_| state_error())? = Some(refreshed);
+        Ok(())
+    })?;
+    Ok(auth_status_after(&state))
 }
 
 #[tauri::command]

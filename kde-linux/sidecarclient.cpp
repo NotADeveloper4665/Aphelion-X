@@ -26,6 +26,7 @@ bool commandAllowed(const QString &command)
     return command == QStringLiteral("app_exit")
         || command == QStringLiteral("backend_status")
         || command == QStringLiteral("auth_status")
+        || command == QStringLiteral("load_session")
         || command == QStringLiteral("refresh_session")
         || command == QStringLiteral("load_settings")
         || command == QStringLiteral("save_settings")
@@ -238,7 +239,8 @@ qulonglong SidecarClient::invoke(const QString &command, const QVariantMap &args
 
     auto *timer = new QTimer(this);
     timer->setSingleShot(true);
-    const int timeoutMs = command == QStringLiteral("poll_login") ? 75000
+    const int timeoutMs = command == QStringLiteral("poll_login")
+        || command == QStringLiteral("load_session") ? 75000
         : command == QStringLiteral("begin_login_window") ? 30000 : 10000;
     connect(timer, &QTimer::timeout, this, [this, id] {
         finish(id, {}, QStringLiteral("Backend request timed out; outcome may be unknown"));

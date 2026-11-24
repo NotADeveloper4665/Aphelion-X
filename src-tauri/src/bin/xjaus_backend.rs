@@ -29,7 +29,7 @@ mod connection_cancel;
 mod console_presence;
 #[path = "../instance_guard.rs"]
 mod instance_guard;
-#[cfg(all(test, not(windows)))]
+#[cfg(any(target_os = "linux", all(test, not(windows))))]
 #[path = "../logout_barrier.rs"]
 mod logout_barrier;
 #[cfg_attr(windows, path = "../profile_windows.rs")]
@@ -380,7 +380,7 @@ impl Backend {
         json!({"authenticated": primary.tokens.is_some(),
             "account": if primary.tokens.is_some() { "Xbox account" } else { "" },
             "catalogAccountScope": primary.tokens.as_ref().and_then(|t| account_scope::catalog_account_scope(&t.web_token)),
-            "storage": "memory (session only)"})
+            "storage": if primary.tokens.is_some() && cfg!(target_os = "linux") { "system keyring" } else if primary.tokens.is_some() { "memory only" } else { "not signed in" }})
     }
     async fn scoped_dispatch(
         &mut self,
@@ -655,6 +655,30 @@ impl Backend {
                 Ok(Value::Null)
             }
             "auth_status" => Ok(self.status()),
+            "load_session" => {
+                if self.primary.lock().unwrap().tokens.is_some() {
+                    return Ok(self.status());
+                }
+                #[cfg(all(target_os = "linux", not(test)))]
+                let saved = vault::load()?;
+                #[cfg(any(not(target_os = "linux"), test))]
+                let saved: Option<TokenBundle> = None;
+                let Some(saved) = saved else {
+                    return Ok(self.status());
+                };
+                let vault_generation = vault::generation()?;
+                let mut changes = self.auth_gate.subscribe();
+                let refreshed = tokio::select! {
+                    _ = self.auth_gate.invalidated(&mut changes, operation_epoch) => return Err(auth_gate::INVALIDATED.into()),
+                    result = auth::refresh_bundle(&self.client, &saved) => result.map_err(|e| e.to_string())?,
+                };
+                self.auth_gate.commit(operation_epoch, || {
+                    vault::save_if_generation(&refreshed, &saved, vault_generation)?;
+                    self.primary.lock().unwrap().tokens = Some(Arc::new(refreshed));
+                    Ok::<_, String>(())
+                })?;
+                Ok(self.status())
+            }
             "cancel_login" => {
                 if args.get("__xjausCancelApplied").and_then(Value::as_bool) == Some(true) {
                     self.primary.lock().unwrap().pending = None;
@@ -731,7 +755,7 @@ impl Backend {
                                     Ok::<_, String>(stored)
                                 })?;
                                 if stored.is_err() {
-                                    return Err("Autenticado, pero no fue posible guardar la sesión; permanece en memoria".into());
+                                    return Err("Authentication succeeded, but the system keyring could not save the session. Unlock or enable the keyring, then sign in again.".into());
                                 }
                                 Ok(self.status())
                             }
@@ -770,9 +794,11 @@ impl Backend {
                     }
                 }
             }
-            "load_session" => Err("Session restoration is disabled; sign in again".into()),
             "persist_session" => {
-                Err("Session persistence is disabled; sessions are memory only".into())
+                let current = self.tokens()?;
+                #[cfg(all(target_os = "linux", not(test)))]
+                vault::save(&current)?;
+                Ok(self.status())
             }
             "refresh_session" => {
                 let epoch = operation_epoch;

@@ -206,9 +206,9 @@ Kirigami.ApplicationWindow {
             attemptId = ""
             userCode = ""
             verificationUri = ""
-            loginMessage = "Signed in for this app session."
+            loginMessage = "Signed in. Your session is stored in the system keyring."
         } else if (!polling && !loginStarting) {
-            loginMessage = "Sign in to continue. Authentication is held in memory."
+            loginMessage = "Sign in to continue. Your session can be restored from the system keyring."
         }
     }
 
@@ -237,7 +237,7 @@ Kirigami.ApplicationWindow {
         if (backend.frontendUrl.toString().length > 0)
             webPlayer.url = backend.frontendUrl
         if (backend.available) {
-            statusRequestId = backend.invoke("auth_status")
+            statusRequestId = backend.invoke("load_session")
             loadBackendStatus()
         }
     }
@@ -248,7 +248,7 @@ Kirigami.ApplicationWindow {
         function onAvailableChanged() {
             if (backend.available) {
                 loginMessage = "Backend ready. Checking sign-in status…"
-                statusRequestId = backend.invoke("auth_status")
+                statusRequestId = backend.invoke("load_session")
                 loadBackendStatus()
             } else {
                 loginMessage = backend.statusMessage
@@ -281,12 +281,16 @@ Kirigami.ApplicationWindow {
                 return
             }
 
-            if (command === "auth_status" && id === root.statusRequestId) {
+            if ((command === "auth_status" || command === "load_session") && id === root.statusRequestId) {
                 if (error.length > 0) {
-                    root.loginMessage = "Could not read sign-in status."
+                    root.loginMessage = command === "load_session"
+                        ? "Could not restore the saved session. Check the keyring and network, or sign in again."
+                        : "Could not read sign-in status."
                     return
                 }
                 root.applyAuthStatus(result)
+                if (command === "load_session")
+                    root.loadBackendStatus()
                 return
             }
 
@@ -622,7 +626,7 @@ Kirigami.ApplicationWindow {
 
                 Controls.Label {
                     Layout.fillWidth: true
-                    text: "Signed in · authentication is held in memory"
+                    text: "Signed in · session protected by the system keyring"
                     horizontalAlignment: Text.AlignHCenter
                     opacity: 0.8
                 }

@@ -30,6 +30,8 @@ Kirigami.ApplicationWindow {
     property double cloudRequestId: 0
     property double settingsLoadRequestId: 0
     property double settingsSaveRequestId: 0
+    property double backendStatusRequestId: 0
+    property string backendHealthMessage: "Backend health has not been checked."
     property string currentSection: "home"
     property string consoleMessage: "Consoles have not been loaded."
     property string serverMessage: "Streaming servers have not been loaded."
@@ -132,9 +134,18 @@ Kirigami.ApplicationWindow {
         }
     }
 
+    function loadBackendStatus() {
+        if (!backend.available)
+            return
+        backendHealthMessage = "Checking Rust service…"
+        backendStatusRequestId = backend.invoke("backend_status")
+    }
+
     Component.onCompleted: {
-        if (backend.available)
+        if (backend.available) {
             statusRequestId = backend.invoke("auth_status")
+            loadBackendStatus()
+        }
     }
 
     Connections {
@@ -144,6 +155,7 @@ Kirigami.ApplicationWindow {
             if (backend.available) {
                 loginMessage = "Backend ready. Checking sign-in status…"
                 statusRequestId = backend.invoke("auth_status")
+                loadBackendStatus()
             } else {
                 loginMessage = backend.statusMessage
             }
@@ -155,6 +167,16 @@ Kirigami.ApplicationWindow {
         }
 
         function onRequestFinished(id, command, result, error) {
+            if (command === "backend_status" && id === root.backendStatusRequestId) {
+                root.backendHealthMessage = error.length > 0
+                    ? "Rust service health query failed."
+                    : (result.ready === true
+                        ? "Rust service ready · v" + String(result.version || "?")
+                            + " · " + String(result.platform || "platform unknown")
+                        : "Rust service did not report ready.")
+                return
+            }
+
             if (command === "auth_status" && id === root.statusRequestId) {
                 if (error.length > 0) {
                     root.loginMessage = "Could not read sign-in status."
@@ -712,6 +734,14 @@ Kirigami.ApplicationWindow {
                 Layout.fillWidth: true
                 type: Kirigami.MessageType.Information
                 text: "This is the first Linux-native UI slice. The existing app remains the full-featured fallback until playback and remaining interactions are migrated."
+            }
+
+            Controls.Label {
+                Layout.fillWidth: true
+                text: root.backendHealthMessage
+                opacity: 0.8
+                wrapMode: Text.Wrap
+                horizontalAlignment: Text.AlignHCenter
             }
 
             Controls.Label {

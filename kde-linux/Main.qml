@@ -160,6 +160,10 @@ Kirigami.ApplicationWindow {
             if (Array.isArray(value[key]))
                 counts.push(key + "=" + value[key].length)
         }
+        if (value.results && typeof value.results === "object" && !Array.isArray(value.results)) {
+            counts.push("results=object")
+            counts.push("resultsKeys=" + Object.keys(value.results).slice(0, 8).join(","))
+        }
         if (typeof value.totalItems === "number")
             counts.push("totalItems=" + value.totalItems)
         if (value.result && typeof value.result === "object" && !Array.isArray(value.result))

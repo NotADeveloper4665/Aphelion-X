@@ -50,6 +50,8 @@ mod subscription;
 mod vault;
 #[path = "../wake.rs"]
 mod wake;
+#[path = "../xhome_discovery.rs"]
+mod xhome_discovery;
 
 #[cfg(windows)]
 #[path = "../windows_fs.rs"]
@@ -885,7 +887,7 @@ impl Backend {
                     zeroize::Zeroizing::new(format!("XBL3.0 x={hash};{}", token.as_str()))
                 };
                 let devices = get_json(&self.client, "https://xccs.xboxlive.com/lists/devices?queryCurrentDevice=false&includeStorageDevices=true".into(), Some(&auth), false,
-                    &[("x-xbl-contract-version", "4"), ("skillplatform", "RemoteManagement"), ("Cache-Control", "no-store, no-cache, must-revalidate"), ("Pragma", "no-cache")]).await?;
+                    &[("Accept-Language", "en-US"), ("x-xbl-contract-version", "2"), ("x-xbl-client-name", "XboxApp"), ("x-xbl-client-type", "UWA"), ("x-xbl-client-version", "39.39.22001.0"), ("Cache-Control", "no-store, no-cache, must-revalidate"), ("Pragma", "no-cache")]).await?;
                 Ok(console_presence::refresh(&self.client, &auth, devices).await)
             }
             "list_streaming_servers" | "list_cloud_titles" => {
@@ -903,37 +905,28 @@ impl Backend {
                     kind: SessionKind,
                     epoch: u64,
                 ) -> Result<Value, String> {
-                    let (host, bearer, path) = {
+                    async fn list_once(
+                        client: &Client,
+                        backend: &Backend,
+                        kind: SessionKind,
+                    ) -> Result<Value, String> {
                         let bundle = backend.tokens()?;
-                        let token = Backend::streaming_token(&bundle, kind)?;
-                        let host = region_host(token)?;
-                        let bearer = text_field(token, "gsToken")?;
-                        let path = if kind == SessionKind::Cloud {
-                            "/v2/titles"
-                        } else {
-                            "/v6/servers/home"
-                        };
-                        (host, bearer, path)
-                    };
-                    let url = format!("https://{host}{path}");
-                    // Greenlight's xHome client identifies itself and sends
-                    // device metadata on this endpoint. Without those headers
-                    // Xbox can answer successfully with an empty console list.
-                    let device_info = session::home_discovery_device_info().to_string();
-                    let home_headers = [
-                        ("Accept", "application/json"),
-                        ("Content-Type", "application/json"),
-                        ("X-Gssv-Client", "XboxComBrowser"),
-                        ("X-MS-Device-Info", device_info.as_str()),
-                        ("Cache-Control", "no-store, no-cache, must-revalidate"),
-                        ("Pragma", "no-cache"),
-                    ];
-                    let headers: &[(&str, &str)] = if kind == SessionKind::Home {
-                        &home_headers
-                    } else {
-                        &[]
-                    };
-                    match get_json(client, url.clone(), Some(&bearer), true, headers).await {
+                        let token = Backend::streaming_token(&bundle, kind)?.clone();
+                        if kind == SessionKind::Home {
+                            return xhome_discovery::list_servers(client, &token).await;
+                        }
+                        let host = region_host(&token)?;
+                        let bearer = text_field(&token, "gsToken")?;
+                        get_json(
+                            client,
+                            format!("https://{host}/v2/titles"),
+                            Some(&bearer),
+                            true,
+                            &[],
+                        )
+                        .await
+                    }
+                    match list_once(client, backend, kind).await {
                         Ok(value) => Ok(value),
                         Err(error) if error.contains("HTTP 401") => {
                             let vault_generation = vault::generation()?;
@@ -946,20 +939,8 @@ impl Backend {
                                 backend.primary.lock().unwrap().tokens = Some(Arc::new(updated));
                                 Ok::<_, String>(())
                             })?;
-                            let bundle = backend.tokens()?;
-                            let token = Backend::streaming_token(&bundle, kind)?;
-                            let host = region_host(token)?;
-                            let bearer = text_field(token, "gsToken")?;
-                            // F7: reintentar contra la región del bundle
-                            // renovado, no contra la URL previa al refresh.
-                            get_json(
-                                client,
-                                format!("https://{host}{path}"),
-                                Some(&bearer),
-                                true,
-                                headers,
-                            )
-                            .await
+                            // Recompute all xHome regions from the refreshed token.
+                            list_once(client, backend, kind).await
                         }
                         Err(error) => Err(error),
                     }

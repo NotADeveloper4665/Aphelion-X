@@ -32,6 +32,7 @@ mod subscription;
 #[cfg_attr(windows, path = "vault_windows.rs")]
 pub mod vault;
 mod wake;
+mod xhome_discovery;
 #[cfg(windows)]
 mod windows_fs;
 
@@ -686,8 +687,11 @@ async fn list_consoles_smartglass(state: State<'_, AppState>) -> Result<Value, S
                 None,
                 Some(&authorization),
                 &[
-                    ("x-xbl-contract-version", "4"),
-                    ("skillplatform", "RemoteManagement"),
+                    ("Accept-Language", "en-US"),
+                    ("x-xbl-contract-version", "2"),
+                    ("x-xbl-client-name", "XboxApp"),
+                    ("x-xbl-client-type", "UWA"),
+                    ("x-xbl-client-version", "39.39.22001.0"),
                     ("Cache-Control", "no-store, no-cache, must-revalidate"),
                     ("Pragma", "no-cache"),
                 ],
@@ -817,29 +821,25 @@ fn check_stream_attempt(state: &AppState, id: Option<&str>) -> Result<(), String
 
 #[tauri::command]
 async fn list_streaming_servers(state: State<'_, AppState>) -> Result<Value, String> {
-    let bundle = snapshot_tokens(&state)?;
-    let host = region_host(&bundle.home_stream_token)?;
-    let bearer = token_text(&bundle.home_stream_token, "gsToken")?;
-    // Match the client headers used by Xbox's browser streaming API clients.
-    // In particular, /v6/servers/home can return an empty list when these are
-    // omitted even though the same account can see its console in Greenlight.
-    let device_info = session::home_discovery_device_info().to_string();
-    let headers = [
-        ("Accept", "application/json"),
-        ("Content-Type", "application/json"),
-        ("X-Gssv-Client", "XboxComBrowser"),
-        ("X-MS-Device-Info", device_info.as_str()),
-        ("Cache-Control", "no-store, no-cache, must-revalidate"),
-        ("Pragma", "no-cache"),
-    ];
-    get_json(
-        &state.client,
-        format!("https://{host}/v6/servers/home"),
-        Some(&bearer),
-        None,
-        &headers,
-    )
-    .await
+    let (epoch, bundle) = snapshot_read_auth(&state)?;
+    match xhome_discovery::list_servers(&state.client, &bundle.home_stream_token).await {
+        Ok(value) => state.auth_gate.commit(epoch, || Ok(value)),
+        Err(error) if error.contains("HTTP 401") => {
+            let vault_generation = vault::generation()?;
+            let refreshed = auth::refresh_bundle(&state.client, &bundle)
+                .await
+                .map_err(|e| format!("Xbox session refresh failed: {e}"))?;
+            state.auth_gate.commit(epoch, || {
+                vault::save_if_generation(&refreshed, &bundle, vault_generation)?;
+                *state.tokens.lock().map_err(|_| state_error())? = Some(refreshed.clone());
+                Ok(())
+            })?;
+            let value =
+                xhome_discovery::list_servers(&state.client, &refreshed.home_stream_token).await?;
+            state.auth_gate.commit(epoch, || Ok(value))
+        }
+        Err(error) => Err(error),
+    }
 }
 
 #[tauri::command]

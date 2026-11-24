@@ -147,6 +147,22 @@ Kirigami.ApplicationWindow {
             counts.push("totalItems=" + value.totalItems)
         if (value.result && typeof value.result === "object" && !Array.isArray(value.result))
             counts.push("resultKeys=" + Object.keys(value.result).slice(0, 8).join(","))
+        const regions = value._xjausDiscovery && value._xjausDiscovery.regions
+        if (Array.isArray(regions)) {
+            const attempts = regions.slice(0, 6).map(entry => {
+                if (!entry || typeof entry !== "object")
+                    return "unknown"
+                let summary = String(entry.region || "region") + ":" + String(entry.status || "unknown")
+                if (typeof entry.httpStatus === "number")
+                    summary += "/HTTP " + entry.httpStatus
+                if (typeof entry.count === "number")
+                    summary += "/" + entry.count
+                if (Array.isArray(entry.keys) && entry.keys.length)
+                    summary += "/keys=" + entry.keys.slice(0, 5).join(",")
+                return summary
+            })
+            counts.push("regionChecks=" + attempts.join(" | "))
+        }
         return "responseKeys=" + (keys.length ? keys.join(",") : "none")
             + (counts.length ? "; " + counts.join("; ") : "")
     }

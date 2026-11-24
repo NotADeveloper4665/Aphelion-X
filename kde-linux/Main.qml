@@ -159,6 +159,10 @@ Kirigami.ApplicationWindow {
                     summary += "/" + entry.count
                 if (Array.isArray(entry.keys) && entry.keys.length)
                     summary += "/keys=" + entry.keys.slice(0, 5).join(",")
+                if (entry.resultsType)
+                    summary += "/results=" + String(entry.resultsType)
+                if (Array.isArray(entry.resultsKeys) && entry.resultsKeys.length)
+                    summary += "/resultKeys=" + entry.resultsKeys.slice(0, 5).join(",")
                 return summary
             })
             counts.push("regionChecks=" + attempts.join(" | "))

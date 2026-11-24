@@ -65,19 +65,66 @@ pub fn regions(token: &Value) -> Result<Vec<(String, String)>, String> {
     Ok(result)
 }
 
-pub fn server_records(value: &Value) -> Option<&Vec<Value>> {
+pub fn server_records(value: &Value) -> Option<Vec<Value>> {
     if let Some(array) = value.as_array() {
-        return Some(array);
+        return Some(array.clone());
     }
     for key in ["results", "servers", "result", "devices", "consoles"] {
-        if let Some(array) = value.get(key).and_then(Value::as_array) {
-            return Some(array);
+        if let Some(nested) = value.get(key) {
+            if nested.is_array() || nested.is_object() {
+                if let Some(records) = server_records(nested) {
+                    return Some(records);
+                }
+            }
         }
     }
-    value
-        .get("result")
-        .filter(|nested| nested.is_object())
-        .and_then(server_records)
+    let object = value.as_object()?;
+    if ["serverId", "server_id", "id"]
+        .iter()
+        .any(|key| object.get(*key).and_then(Value::as_str).is_some_and(|id| !id.is_empty()))
+    {
+        return Some(vec![value.clone()]);
+    }
+
+    // Some Xbox responses encode results as an object instead of an array.
+    // Accept both a named envelope and a map keyed by server ID.
+    for key in ["items", "servers", "server", "devices", "consoles", "values"] {
+        if let Some(nested) = object.get(key) {
+            if nested.is_array() || nested.is_object() {
+                if let Some(records) = server_records(nested) {
+                    return Some(records);
+                }
+            }
+        }
+    }
+    if !object.is_empty() && object.values().all(Value::is_object) {
+        return Some(
+            object
+                .iter()
+                .map(|(key, value)| {
+                    let mut record = value.clone();
+                    if record.get("serverId").and_then(Value::as_str).is_none()
+                        && record.get("server_id").and_then(Value::as_str).is_none()
+                        && record.get("id").and_then(Value::as_str).is_none()
+                    {
+                        if let Some(record) = record.as_object_mut() {
+                            record.insert("serverId".into(), Value::String(key.clone()));
+                        }
+                    }
+                    record
+                })
+                .collect(),
+        );
+    }
+    None
+}
+
+fn normalized_server_response(value: &Value) -> Option<Value> {
+    let records = server_records(value)?;
+    let mut normalized = value.clone();
+    let object = normalized.as_object_mut()?;
+    object.insert("results".into(), Value::Array(records));
+    Some(normalized)
 }
 
 pub async fn list_servers(client: &Client, token: &Value) -> Result<Value, String> {
@@ -130,15 +177,41 @@ pub async fn list_servers(client: &Client, token: &Value) -> Result<Value, Strin
             }
         };
         had_success = true;
-        match server_records(&value) {
-            Some(records) if !records.is_empty() => return Ok(value),
-            Some(records) => outcomes.push(json!({"region": name, "status": "empty", "count": records.len()})),
+        match normalized_server_response(&value) {
+            Some(normalized) if !normalized["results"].as_array().is_some_and(Vec::is_empty) => {
+                return Ok(normalized)
+            }
+            Some(normalized) => outcomes.push(json!({
+                "region": name,
+                "status": "empty",
+                "count": normalized["results"].as_array().map(Vec::len).unwrap_or(0)
+            })),
             None => {
-                let keys = value
+                let value_keys = value
                     .as_object()
                     .map(|object| object.keys().take(8).cloned().collect::<Vec<_>>())
                     .unwrap_or_default();
-                outcomes.push(json!({"region": name, "status": "unexpected_shape", "keys": keys}));
+                let results = value.get("results");
+                let results_type = match results {
+                    Some(value) if value.is_array() => "array",
+                    Some(value) if value.is_object() => "object",
+                    Some(value) if value.is_string() => "string",
+                    Some(value) if value.is_number() => "number",
+                    Some(value) if value.is_boolean() => "boolean",
+                    Some(_) => "other",
+                    None => "missing",
+                };
+                let results_keys = results
+                    .and_then(Value::as_object)
+                    .map(|object| object.keys().take(8).cloned().collect::<Vec<_>>())
+                    .unwrap_or_default();
+                outcomes.push(json!({
+                    "region": name,
+                    "status": "unexpected_shape",
+                    "keys": value_keys,
+                    "resultsType": results_type,
+                    "resultsKeys": results_keys
+                }));
             }
         }
     }
@@ -194,6 +267,20 @@ mod tests {
     fn response_records_accepts_known_shapes_and_rejects_unknown_shape() {
         assert_eq!(server_records(&json!({"results":[{"serverId":"x"}]})).unwrap().len(), 1);
         assert_eq!(server_records(&json!({"result":{"servers":[1]}})).unwrap().len(), 1);
+        assert_eq!(
+            server_records(&json!({"results":{"serverId":"x","name":"Xbox"}})).unwrap().len(),
+            1
+        );
+        let mapped = server_records(&json!({"results":{"xbox-id":{"name":"Xbox"}}})).unwrap();
+        assert_eq!(mapped[0]["serverId"], "xbox-id");
         assert!(server_records(&json!({"payload":[]})).is_none());
+
+        let normalized = normalized_server_response(&json!({
+            "continuationToken": "opaque",
+            "results": {"serverId": "x", "name": "Xbox"},
+            "totalItems": 1
+        })).unwrap();
+        assert_eq!(normalized["results"].as_array().unwrap().len(), 1);
+        assert_eq!(normalized["results"][0]["serverId"], "x");
     }
 }

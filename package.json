@@ -23,8 +23,9 @@
     "prebuild:win": "npm run build && npm run electron:build-backend:win",
     "electron:build-backend:win": "node scripts/build-windows.cjs",
     "electron:build-backend:linux": "node scripts/build-linux.cjs",
-    "dist:linux": "node scripts/packaging.cjs",
-    "dist:linux:kde": "node scripts/build-linux-kde.cjs"
+    "dist:linux": "node scripts/build-linux-kde.cjs",
+    "dist:linux:kde": "node scripts/build-linux-kde.cjs",
+    "dist:linux:electron": "node scripts/packaging.cjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

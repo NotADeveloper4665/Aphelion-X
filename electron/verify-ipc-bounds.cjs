@@ -45,7 +45,9 @@ test('backpressure rejects ordinary requests and reserves logout until drain', a
   assert.equal(h.stdin.writes.length, 1);
   assert.throws(() => h.invoke('logout'), /saturad/i);
   h.stdin.block = false; h.stdin.emit('drain');
-  assert.equal(JSON.parse(h.stdin.writes[1]).cmd, 'logout');
+  const logoutRequest = JSON.parse(h.stdin.writes[1]);
+  assert.equal(logoutRequest.cmd, 'logout');
+  assert.equal(logoutRequest.api_version, 1);
   for (const item of h.context.pending.values()) item.reject(new Error('cleanup'));
   await Promise.allSettled([first, logout]);
 });

@@ -38,7 +38,7 @@ Install the locked Node dependencies once, then build the renderer, Rust sidecar
 
 The build needs Node/npm, the Qt 6/Kirigami/WebEngine development packages, CMake, a C++20 compiler, Rust/Cargo, RPM build tools, and the WebKitGTK/libsecret development packages used by the shared backend. The CI job installs these from Fedora 44 repositories.
 
-This produces a Fedora RPM in `release/linux-kde/` and installs an XJAUS desktop entry, icon, Kirigami executable, web player assets, and Rust sidecar. CI uploads the RPM for seven days. Existing published Linux release artifacts remain unchanged until the playback gate below is met.
+This produces a Fedora RPM in `release/linux-kde/` and installs an XJAUS desktop entry, icon, Kirigami executable, web player assets, and Rust sidecar. The proposed GitHub Actions job uploads the RPM for seven days once that workflow is present on the repository's default branch. Existing published Linux release artifacts remain unchanged until the playback gate below is met.
 
 Tokens remain in the Rust sidecar. The UI accepts only Microsoft device-login HTTPS URLs already used by the app. Requests carry IPC API version 1; unversioned clients remain accepted by the backend, while unknown versions are rejected before dispatch. The Rust process remains the single owner of authentication, session, cancellation, settings, and Xbox API state.
 

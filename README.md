@@ -1,8 +1,10 @@
-# XJAUS
+# XJAUS-KDE
 
 [Español](README.es.md)
 
 XJAUS is an independent desktop client for Xbox Cloud Gaming and Xbox Remote Play. Its controller-oriented interface runs in Electron, with a Rust sidecar for authentication and stream control. Cloud availability depends on Microsoft service eligibility, region and account; Remote Play requires a compatible console configured for remote features.
+
+XJAUS-KDE is a fork built using some architecture from aphelion "another streaming project" and combining it with a QT/kde gui and improved health reporting
 
 ## Navigation
 

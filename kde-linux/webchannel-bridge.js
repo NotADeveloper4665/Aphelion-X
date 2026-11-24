@@ -8,18 +8,39 @@
         new QWebChannel(qt.webChannelTransport, channel => {
             const backend = channel.objects.backend;
             const pending = new Map();
+            const earlyResponses = new Map();
             backend.requestFinished.connect((id, command, result, error) => {
-                const item = pending.get(String(id));
-                if (!item) return;
-                pending.delete(String(id));
+                const key = String(id);
+                const item = pending.get(key);
+                if (!item) {
+                    // The QWebChannel method return and our completion signal
+                    // are separate asynchronous messages. Keep a small bounded
+                    // cache for the unlikely case the signal arrives first.
+                    if (earlyResponses.size >= 64)
+                        earlyResponses.delete(earlyResponses.keys().next().value);
+                    earlyResponses.set(key, { result, error });
+                    return;
+                }
+                pending.delete(key);
                 if (error) item.reject(new Error(error));
                 else item.resolve(result);
             });
             window.xjaus = Object.freeze({
                 invoke(command, args = {}) {
                     return new Promise((resolve, reject) => {
-                        const id = backend.invoke(command, args || {});
-                        pending.set(String(id), { resolve, reject });
+                        // QWebChannel methods are asynchronous: C++ return
+                        // values arrive through the last-argument callback.
+                        backend.invoke(command, args || {}, id => {
+                            const key = String(id);
+                            const early = earlyResponses.get(key);
+                            if (early) {
+                                earlyResponses.delete(key);
+                                if (early.error) reject(new Error(early.error));
+                                else resolve(early.result);
+                                return;
+                            }
+                            pending.set(key, { resolve, reject });
+                        });
                     });
                 },
                 fullscreen(action) {

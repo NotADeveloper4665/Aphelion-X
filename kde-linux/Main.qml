@@ -48,24 +48,8 @@ Kirigami.ApplicationWindow {
         audio: "opus", audioGain: 1
     })
 
-    WebEngineScript {
-        id: webChannelLibrary
-        name: "xjaus-webchannel-library"
-        sourceUrl: "qrc:///qtwebchannel/qwebchannel.js"
-        injectionPoint: WebEngineScript.DocumentCreation
-        worldId: WebEngineScript.MainWorld
-    }
-
     WebChannel {
         id: nativeChannel
-    }
-
-    WebEngineScript {
-        id: webChannelBridge
-        name: "xjaus-native-bridge"
-        sourceUrl: "qrc:/xjaus/webchannel-bridge.js"
-        injectionPoint: WebEngineScript.DocumentCreation
-        worldId: WebEngineScript.MainWorld
     }
 
     function launchNativeStream(kind, target, name, artwork, consoleItem) {
@@ -203,6 +187,19 @@ Kirigami.ApplicationWindow {
     }
 
     Component.onCompleted: {
+        const channelLibrary = WebEngine.script()
+        channelLibrary.name = "xjaus-webchannel-library"
+        channelLibrary.sourceUrl = "qrc:///qtwebchannel/qwebchannel.js"
+        channelLibrary.injectionPoint = WebEngineScript.DocumentCreation
+        channelLibrary.worldId = WebEngineScript.MainWorld
+
+        const nativeBridge = WebEngine.script()
+        nativeBridge.name = "xjaus-native-bridge"
+        nativeBridge.sourceUrl = "qrc:/xjaus/webchannel-bridge.js"
+        nativeBridge.injectionPoint = WebEngineScript.DocumentCreation
+        nativeBridge.worldId = WebEngineScript.MainWorld
+
+        webPlayer.userScripts.collection = [channelLibrary, nativeBridge]
         nativeChannel.registerObject("backend", backend)
         if (backend.frontendUrl.toString().length > 0)
             webPlayer.url = backend.frontendUrl
@@ -840,7 +837,6 @@ Kirigami.ApplicationWindow {
                                 Layout.fillWidth: true
                                 Layout.fillHeight: true
                                 webChannel: nativeChannel
-                                userScripts: [webChannelLibrary, webChannelBridge]
                                 settings.playbackRequiresUserGesture: false
                                 settings.localContentCanAccessRemoteUrls: true
                                 url: ""
